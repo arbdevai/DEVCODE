@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="devcode_user_profile.xml" />
+        <exclude domain="sharedpref" path="devcode_terminal_settings.xml" />
+        <exclude domain="file" path="devcode/ubuntu/" />
+    </cloud-backup>
+
+    <device-transfer>
+        <exclude domain="sharedpref" path="devcode_user_profile.xml" />
+        <exclude domain="sharedpref" path="devcode_terminal_settings.xml" />
+        <exclude domain="file" path="devcode/ubuntu/" />
+    </device-transfer>
+</data-extraction-rules>

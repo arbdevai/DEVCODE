@@ -1,0 +1,81 @@
+export const meta = {
+  name: 'build-devcode',
+  description: 'Build complete DEVCODE Android app with CI/CD - agents work in parallel across all major systems',
+  phases: [
+    { title: 'Initialize' },
+    { title: 'Android Architecture & UI' },
+    { title: 'Root & Chroot Engine' },
+    { title: 'Ubuntu Manager' },
+    { title: 'Terminal' },
+    { title: 'CI/CD & Verification' },
+    { title: 'Final Integration' },
+  ],
+}
+
+// Stage 1 - Initialize project
+phase('Initialize')
+const project = await agent('Initialize Android project structure with Kotlin/Compose, create all necessary directories, setup local.properties, and create initial build.gradle files. Include precommit hooks and directory structure.', {
+  label: 'initialize-project',
+  phase: 'Initialize',
+  effort: 'low',
+})
+
+// Stage 2 - Android Architecture & UI (parallel with Stage 3-5)
+const uiPromise = agent('Build complete DEVCODE Android UI with Jetpack Compose, Material3. Implement Dashboard screen (status indicators), Ubuntu Manager screen (install/repair/remove), Terminal screen, and Settings screen. Design: modern developer workstation, clean professional, compact navigation. Use Kotlin and Compose.', {
+  label: 'android-ui',
+  phase: 'Android Architecture & UI',
+  effort: 'high',
+})
+
+// Stage 3 - Root & Chroot Engine (parallel with Stage 2)
+const rootPromise = agent('Implement root permission detection/request, chroot process manager, and mount management. Write shell scripts for mounting /proc /sys /dev /dev/pts, bind mounting Android storage, and cleanup on exit. Process tracking with stopping running sessions. Companion script for Ubuntu Manager to control chroot.', {
+  label: 'root-chroot',
+  phase: 'Root & Chroot Engine',
+  effort: 'high',
+})
+
+// Stage 4 - Ubuntu Manager (parallel with Stage 2)
+const ubuntuPromise = agent('Build Ubuntu filesystem manager. Implement download of Ubuntu 24.04 ARM64 minimal, SHA256 verification, extraction, installation status detection, storage usage display, repair functionality, removal, and reinstall. Storage: /data/local/devcode/ubuntu. Handle incomplete downloads, corrupted files, storage errors, permissions.', {
+  label: 'ubuntu-manager',
+  phase: 'Ubuntu Manager',
+  effort: 'high',
+})
+
+// Stage 5 - Terminal Implementation (parallel with Stage 2)
+const terminalPromise = agent('Implement Android terminal application connected to Ubuntu chroot. Features: command input, live output, scrolling, copy/paste, keyboard handling, font size setting, session management. Must connect directly to Ubuntu environment. Use Android's TerminalView or custom implementation.', {
+  label: 'terminal',
+  phase: 'Terminal',
+  effort: 'high',
+})
+
+// Barrier: await all initial implementation
+const [ui, root, ubuntu, terminal] = await parallel([uiPromise, rootPromise, ubuntuPromise, terminalPromise])
+
+// Stage 6 - CI/CD
+phase('CI/CD & Verification')
+const ciPromise = agent('Setup GitHub Actions workflow .github/workflows/android.yml. Requirements: checkout, setup JDK 17, setup Android SDK (commandlinetools), Gradle cache, build APK without local build, upload artifact. Optimize for fast builds, minimal dependencies, reliable artifacts. Include code signing if needed.', {
+  label: 'github-actions',
+  phase: 'CI/CD & Verification',
+  effort: 'low',
+})
+
+// Stage 7 - Final Integration
+phase('Final Integration')
+const integration = await agent(
+  'Review ALL generated code for integration issues. Fix any missing dependencies, incorrect paths, broken imports, Android manifest issues, permission errors. Verify all shell scripts are correct. Check that CI workflow will build successfully. Test end-to-end flow: install → download Ubuntu → chroot → terminal. Fix ALL issues.',
+  {
+    label: 'integration',
+    phase: 'Final Integration',
+    effort: 'high',
+  }
+)
+
+return {
+  project: project,
+  ui: ui,
+  root: root,
+  ubuntu: ubuntu,
+  terminal: terminal,
+  ci: ciPromise,
+  integration: integration,
+}

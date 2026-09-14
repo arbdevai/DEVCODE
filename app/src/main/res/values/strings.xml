@@ -1,0 +1,118 @@
+<resources>
+    <string name="app_name">DEVCODE</string>
+
+    <!-- Navigation -->
+    <string name="dashboard">Dashboard</string>
+    <string name="ubuntu_manager">Ubuntu Manager</string>
+    <string name="terminal">Terminal</string>
+    <string name="settings">Settings</string>
+
+    <!-- Dashboard -->
+    <string name="status_title">Status</string>
+    <string name="ubuntu_installed">Ubuntu Installed</string>
+    <string name="ubuntu_not_installed">Ubuntu Not Installed</string>
+    <string name="ubuntu_version">Version: %s</string>
+    <string name="not_installed">Not Installed</string>
+    <string name="last_updated">Last Updated: %s</string>
+    <string name="storage_used">Storage Used</string>
+    <string name="free_space">Free Space</string>
+    <string name="checking_installation">Checking installation...</string>
+    <string name="refresh">Refresh</string>
+
+    <!-- Ubuntu Manager -->
+    <string name="download_ubuntu">Download Ubuntu 24.04 ARM64 Minimal</string>
+    <string name="install_ubuntu">Install Ubuntu</string>
+    <string name="repair_ubuntu">Repair Ubuntu</string>
+    <string name="remove_ubuntu">Remove Ubuntu</string>
+    <string name="reinstall_ubuntu">Reinstall Ubuntu</string>
+    <string name="download_progress">Downloading: %d%%</string>
+    <string name="verify_progress">Verifying checksum: %d%%</string>
+    <string name="extract_progress">Extracting: %d%%</string>
+    <string name="download_complete">Download Complete</string>
+    <string name="download_failed">Download Failed</string>
+    <string name="verification_complete">Verification Complete</string>
+    <string name="verification_failed">Verification Failed</string>
+    <string name="extraction_complete">Extraction Complete</string>
+    <string name="extraction_failed">Extraction Failed</string>
+    <string name="installation_complete">Installation Complete</string>
+    <string name="installation_failed">Installation Failed</string>
+    <string name="repair_complete">Repair Complete</string>
+    <string name="repair_failed">Repair Failed</string>
+    <string name="files_removed">Files Removed Successfully</string>
+    <string name="remove_failed">Failed to Remove Ubuntu</string>
+    <string name="not_enough_space">Not Enough Space to Install Ubuntu</string>
+    <string name="storage_location">Storage Location: %s</string>
+    <string name="download_error">Download Error: %s</string>
+    <string name="verifying">Verifying...</string>
+    <string name="downloading">Downloading...</string>
+    <string name="extracting">Extracting...</string>
+    <string name="installing">Installing...</string>
+    <string name="repairing">Repairing...</string>
+    <string name="removing">Removing...</string>
+    <string name="reinstalling">Reinstalling...</string>
+    <string name="device_not_rooted">Device Not Rooted</string>
+    <string name="root_required">Root Access Required for Ubuntu</string>
+    <string name="root_detected">Root Detected</string>
+    <string name="grant_root">Grant Root Permission</string>
+
+    <!-- Terminal -->
+    <string name="terminal_title">Terminal</string>
+    <string name="command_input">Enter command...</string>
+    <string name="clear_screen">Clear Screen</string>
+    <string name="new_session">New Session</string>
+    <string name="copy">Copy</string>
+    <string name="paste">Paste</string>
+    <string name="font_size">Font Size</string>
+    <string name="line_height">Line Height</string>
+    <string name="terminal_settings">Terminal Settings</string>
+    <string name="background_color">Background Color</string>
+    <string name="text_color">Text Color</string>
+    <string name="export_session">Export Session</string>
+    <string name="import_session">Import Session</string>
+    <string name="no_session_active">No session active</string>
+    <string name="session_saved">Session Saved</string>
+    <string name="font_size_preview">Aa</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="general">General</string>
+    <string name="terminal">Terminal</string>
+    <string name="storage">Storage</string>
+    <string name="about">About</string>
+    <string name="app_version">Version: %s</string>
+    <string name="kernel_version">Kernel Version: %s</string>
+    <string name="android_version">Android Version: %s</string>
+    <string name="terminal_dimensions">Terminal Dimensions</string>
+    <string name="terminal_columns">Columns</string>
+    <string name="terminal_rows">Rows</string>
+    <string name="save_session_on_exit">Save Session</string>
+    <string name="clear_session_history">Clear Session History</string>
+    <string name="reset_to_defaults">Reset to Defaults</string>
+    <string name="language">Language</string>
+    <string name="theme">Theme</string>
+    <string name="light_theme">Light Theme</string>
+    <string name="dark_theme">Dark Theme</string>
+    <string name="system_theme">System Theme</string>
+    <string name="confirm_clear">Confirm Clear</string>
+    <string name="confirm_delete">Confirm Delete</string>
+
+    <!-- Errors and Messages -->
+    <string name="error">Error</string>
+    <string name="success">Success</string>
+    <string name="close">Close</string>
+    <string name="details">Details</string>
+    <string name="no_internet_connection">No Internet Connection</string>
+    <string name="invalid_action">Invalid Action</string>
+    <string name="operation_cancelled">Operation Cancelled</string>
+    <string name="retry">Retry</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="loading">Loading...</string>
+
+    <!-- Ubuntu Info -->
+    <string name="ubuntu_download_url">https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04-live-server-arm64.iso.zsync</string>
+    <string name="ubuntu_hash_url">https://cdimage.ubuntu.com/releases/24.04/releaseSHA256SUMS</string>
+
+</resources>

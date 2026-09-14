@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="sharedpref" path="devcode_user_profile.xml" />
+    <exclude domain="sharedpref" path="devcode_terminal_settings.xml" />
+    <exclude domain="file" path="devcode/ubuntu/" />
+</full-backup-content>
