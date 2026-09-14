@@ -76,8 +76,7 @@
     <!-- Settings -->
     <string name="settings_title">Settings</string>
     <string name="general">General</string>
-    <string name="terminal">Terminal</string>
-    <string name="storage">Storage</string>
+    <string name="general_terminal_header">Terminal</string>
     <string name="about">About</string>
     <string name="app_version">Version: %s</string>
     <string name="kernel_version">Kernel Version: %s</string>
