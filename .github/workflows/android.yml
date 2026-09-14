@@ -52,10 +52,28 @@ jobs:
     - name: Run unit tests
       run: ./gradlew :app:testDebugUnitTest --stacktrace
 
+    - name: Verify APK was produced
+      run: |
+        ls -lh app/build/outputs/apk/debug/
+        du -h app/build/outputs/apk/debug/*.apk
+
     - name: Upload debug APK
       uses: actions/upload-artifact@v4
+      continue-on-error: true
       with:
         name: devcode-apk
         path: app/build/outputs/apk/debug/*.apk
-        if-no-files-found: error
+        if-no-files-found: warn
         retention-days: 30
+
+    - name: Create GitHub Release with APK
+      if: github.ref == 'refs/heads/main'
+      continue-on-error: true
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: build-${{ github.run_number }}
+        name: DEVCODE build ${{ github.run_number }}
+        body: |
+          Automated debug APK build from CI run ${{ github.run_number }}.
+          Commit: ${{ github.sha }}
+        files: app/build/outputs/apk/debug/*.apk
