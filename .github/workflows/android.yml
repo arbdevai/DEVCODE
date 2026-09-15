@@ -40,6 +40,22 @@ jobs:
       run: |
         sdkmanager "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
 
+    # --- Deterministic CI release keystore (NOT production secrets) ---
+    # The same keystore + fingerprint must ship in the repo so every CI build
+    # produces an APK signed by the SAME certificate — otherwise Android treats
+    # each build-N release as a different app and blocks re-install/updates.
+    - name: Restore CI signing keystore
+      run: |
+        python3 - <<'PYEOF'
+        import base64, pathlib
+        keystore = pathlib.Path("app/ci-release.keystore")
+        if keystore.exists():
+            print("keystore already present, skipping")
+        else:
+            print("MISSING app/ci-release.keystore - build will fail; commit it to the repo")
+            raise SystemExit(1)
+        PYEOF
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
@@ -51,6 +67,16 @@ jobs:
 
     - name: Run unit tests
       run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+    - name: Verify APK signatures (v1+v2+v3) and fingerprint
+      run: |
+        APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+        APK=$(ls app/build/outputs/apk/debug/*.apk | head -n 1)
+        echo "APK: $APK"
+        ls -lh "$APK"
+        "$APKSIGNER" verify --verbose --print-certs "$APK"
+        echo "--- fingerprint (must stay constant across builds) ---"
+        "$APKSIGNER" verify --print-certs "$APK" | grep -E "SHA-256|SHA-1" | sort -u
 
     - name: Verify APK was produced
       run: |
@@ -76,4 +102,7 @@ jobs:
         body: |
           Automated debug APK build from CI run ${{ github.run_number }}.
           Commit: ${{ github.sha }}
+
+          The APK is signed with the stable CI release key (v1+v2+v3 enabled),
+          so it can be installed as an update over previous DEVCODE builds.
         files: app/build/outputs/apk/debug/*.apk

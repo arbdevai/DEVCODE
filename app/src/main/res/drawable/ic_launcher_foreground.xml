@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Terminal Chevron > -->
+    <path
+        android:strokeColor="#7DD3FC"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M38,40 L54,54 L38,68" />
+    <!-- Underscore _ -->
+    <path
+        android:strokeColor="#7DD3FC"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M60,68 L74,68" />
+    <!-- Cursor block -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M78,58 h6 v10 h-6 z" />
+</vector>

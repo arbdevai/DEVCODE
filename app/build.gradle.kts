@@ -20,6 +20,19 @@ android {
         }
     }
 
+    signingConfigs {
+        create("ci") {
+            storeFile = file("ci-release.keystore")
+            storePassword = "devcode-ci"
+            keyAlias = "devcode"
+            keyPassword = "devcode-ci"
+            storeType = "PKCS12"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -27,8 +40,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("ci")
         }
         debug {
+            signingConfig = signingConfigs.getByName("ci")
         }
     }
 

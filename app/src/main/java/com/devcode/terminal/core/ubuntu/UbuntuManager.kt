@@ -122,18 +122,52 @@ object UbuntuManager {
 
     /**
      * Ensures /data/local/devcode exists and is owned by DEVCODE.
-     * Creates the base only when absent; never adopts unknown content silently.
+     *
+     * Older builds created an empty mount-point skeleton before the marker was
+     * written, so an unmarked base is claimable only when it contains no files
+     * or symlinks and every directory is one of the known empty mount points.
+     * Any unknown file, symlink, or non-empty directory fails closed.
      */
     private fun ensureOwnedBase() {
-        val (mCode, mOut) = su(
-            "if [ -L /data/local/devcode ]; then echo SYMLINK; exit 3; fi; " +
-                "if [ ! -e /data/local/devcode ]; then mkdir -p /data/local/devcode && echo '$OWNER_VALUE' > $OWNER_MARKER && echo CREATED; exit 0; fi; " +
-                "cat $OWNER_MARKER 2>/dev/null"
-        )
-        if (mCode != 0) throw IllegalStateException("cannot verify base ownership: $mOut")
-        val marker = mOut.trim().lines().lastOrNull().orEmpty()
-        if (marker != OWNER_VALUE && marker != "CREATED") {
-            throw IllegalStateException("base dir not owned by DEVCODE; refusing to modify")
+        val command = """
+            set -eu
+            BASE=/data/local/devcode
+            MARKER=$OWNER_MARKER
+            OWNER=$OWNER_VALUE
+            if [ -L "${'$'}BASE" ]; then echo "base directory is a symlink"; exit 3; fi
+            if [ ! -e "${'$'}BASE" ]; then
+                mkdir -p "${'$'}BASE"
+            elif [ ! -d "${'$'}BASE" ]; then
+                echo "base path is not a directory"; exit 3
+            fi
+            if [ -L "${'$'}MARKER" ]; then echo "ownership marker is a symlink"; exit 3; fi
+            if [ -f "${'$'}MARKER" ]; then
+                [ "${'$'}(cat "${'$'}MARKER" 2>/dev/null)" = "${'$'}OWNER" ] || {
+                    echo "ownership marker has a different owner"; exit 3;
+                }
+                echo OK; exit 0
+            fi
+            # Claim only the empty skeleton left by a prior interrupted setup.
+            bad_file="${'$'}(find "${'$'}BASE" -mindepth 1 \( -type f -o -type l \) -print -quit 2>/dev/null || true)"
+            [ -z "${'$'}bad_file" ] || { echo "unmarked base contains a file or symlink"; exit 3; }
+            allowed="ubuntu ubuntu/proc ubuntu/sys ubuntu/dev ubuntu/dev/pts ubuntu/etc ubuntu/run ubuntu/run/devcode ubuntu/run/devcode/sessions ubuntu/sdcard staging cache"
+            for d in ${'$'}(find "${'$'}BASE" -mindepth 1 -type d -print 2>/dev/null || true); do
+                rel=${'$'}{d#"${'$'}BASE"/}
+                ok=no
+                for a in ${'$'}allowed; do [ "${'$'}rel" = "${'$'}a" ] && ok=yes; done
+                [ "${'$'}ok" = yes ] || { echo "unmarked base has unknown directory: ${'$'}rel"; exit 3; }
+            done
+            tmp="${'$'}MARKER.tmp.${'$'}${'$'}"
+            printf '%s\\n' "${'$'}OWNER" > "${'$'}tmp"
+            chmod 600 "${'$'}tmp"
+            mv -f "${'$'}tmp" "${'$'}MARKER"
+            echo OK
+        """.trimIndent()
+        val (code, output) = su(command, 30_000L)
+        if (code != 0) {
+            throw IllegalStateException(
+                "cannot verify /data/local/devcode ownership: ${output.ifBlank { "unmarked directory contains data; remove it manually only if intended" }}"
+            )
         }
     }
 
@@ -434,10 +468,10 @@ object UbuntuManager {
                 return@withContext false
             }
 
-            val (mvCode, _) = su("mv $tmpDir $INSTALL_DIR", 120_000L)
+            val (mvCode, mvOut) = su("rm -rf $INSTALL_DIR && mv $tmpDir $INSTALL_DIR", 120_000L)
             if (mvCode != 0) {
                 su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Activation failed") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Activation failed: $mvOut") }
                 return@withContext false
             }
 
