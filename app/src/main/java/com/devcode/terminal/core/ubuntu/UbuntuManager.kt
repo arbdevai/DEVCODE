@@ -30,7 +30,7 @@ import java.security.MessageDigest
 object UbuntuManager {
 
     const val ROOTFS_URL =
-        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-arm64.tar.gz"
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
     const val SHA256SUMS_URL =
         "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/SHA256SUMS"
     const val INSTALL_DIR = "/data/local/devcode/ubuntu"
@@ -39,7 +39,7 @@ object UbuntuManager {
     const val TARBALL = "$STAGING_DIR/ubuntu-base.tar.gz"
 
     /** Exact filename expected inside SHA256SUMS. */
-    const val TARBALL_FILENAME = "ubuntu-base-24.04-base-arm64.tar.gz"
+    const val TARBALL_FILENAME = "ubuntu-base-24.04.5-base-arm64.tar.gz"
 
     /** Ownership marker proving DEVCODE created /data/local/devcode. */
     const val OWNER_MARKER = "/data/local/devcode/.devcode-owner"

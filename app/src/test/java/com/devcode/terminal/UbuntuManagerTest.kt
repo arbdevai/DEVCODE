@@ -34,7 +34,7 @@ class UbuntuManagerTest {
         assertEquals("/data/local/devcode/staging", UbuntuManager.STAGING_DIR)
         assert(UbuntuManager.ROOTFS_URL.endsWith(".tar.gz"))
         assert(UbuntuManager.SHA256SUMS_URL.endsWith("SHA256SUMS"))
-        assertEquals("ubuntu-base-24.04-base-arm64.tar.gz", UbuntuManager.TARBALL_FILENAME)
+        assertEquals("ubuntu-base-24.04.5-base-arm64.tar.gz", UbuntuManager.TARBALL_FILENAME)
         assertEquals("com.devcode.terminal", UbuntuManager.OWNER_VALUE)
     }
 
@@ -42,34 +42,34 @@ class UbuntuManagerTest {
     fun testParseSha256SumsStandardFormat() {
         val hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         val body = """
-            $hash  ubuntu-base-24.04-base-arm64.tar.gz
+            $hash  ubuntu-base-24.04.5-base-arm64.tar.gz
             1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef  other.tar.gz
         """.trimIndent()
 
-        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04-base-arm64.tar.gz")
+        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04.5-base-arm64.tar.gz")
         assertEquals(hash, parsed)
     }
 
     @Test
     fun testParseSha256SumsBinaryAsteriskFormat() {
         val hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        val body = "$hash *ubuntu-base-24.04-base-arm64.tar.gz"
+        val body = "$hash *ubuntu-base-24.04.5-base-arm64.tar.gz"
 
-        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04-base-arm64.tar.gz")
+        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04.5-base-arm64.tar.gz")
         assertEquals(hash, parsed)
     }
 
     @Test
     fun testParseSha256SumsNotFound() {
         val body = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  unrelated-file.tar.gz"
-        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04-base-arm64.tar.gz")
+        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04.5-base-arm64.tar.gz")
         assertNull(parsed)
     }
 
     @Test
     fun testParseSha256SumsInvalidHashLength() {
-        val body = "tooshort  ubuntu-base-24.04-base-arm64.tar.gz"
-        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04-base-arm64.tar.gz")
+        val body = "tooshort  ubuntu-base-24.04.5-base-arm64.tar.gz"
+        val parsed = UbuntuManager.parseSha256Sums(body, "ubuntu-base-24.04.5-base-arm64.tar.gz")
         assertNull(parsed)
     }
 }

@@ -111,7 +111,7 @@
     <string name="loading">Loading...</string>
 
     <!-- Ubuntu Info -->
-    <string name="ubuntu_download_url">https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04-live-server-arm64.iso.zsync</string>
-    <string name="ubuntu_hash_url">https://cdimage.ubuntu.com/releases/24.04/releaseSHA256SUMS</string>
+    <string name="ubuntu_download_url">https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz</string>
+    <string name="ubuntu_hash_url">https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/SHA256SUMS</string>
 
 </resources>
