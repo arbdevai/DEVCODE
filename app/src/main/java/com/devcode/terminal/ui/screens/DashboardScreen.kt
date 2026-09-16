@@ -40,7 +40,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.devcode.terminal.core.root.RootManager
 import com.devcode.terminal.core.terminal.TerminalManager
 import com.devcode.terminal.core.ubuntu.UbuntuManager
 import com.devcode.terminal.ui.components.StatusRow
@@ -55,12 +54,7 @@ fun DashboardScreen(
     var isRooted by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(Unit) {
-        val rooted = RootManager.isRooted()
-        if (!rooted) {
-            isRooted = RootManager.requestRoot()
-        } else {
-            isRooted = true
-        }
+        isRooted = UbuntuManager.checkRoot(timeoutMs = 15_000L)
     }
 
     val ubuntuState by UbuntuManager.state.collectAsState()

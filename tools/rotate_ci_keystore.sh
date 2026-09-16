@@ -29,7 +29,7 @@ keytool -genkeypair \
   -keyalg RSA \
   -keysize 2048 \
   -validity 10950 \
-  -storetype JKS \
+  -storetype PKCS12 \
   -dname "CN=DEVCODE CI, OU=DEVCODE, O=DEVCODE, L=Jakarta, ST=Jakarta, C=ID"
 
 echo "Wrote $OUT — commit it to the repo."

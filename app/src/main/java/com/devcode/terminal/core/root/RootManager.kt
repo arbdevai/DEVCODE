@@ -58,10 +58,11 @@ object RootManager {
      * Attempts to obtain root by running `su -c echo ok`.
      * Returns true only when the shell acknowledges with "ok".
      */
-    suspend fun requestRoot(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun requestRoot(timeoutMs: Long = DEFAULT_TIMEOUT_MS): Boolean = withContext(Dispatchers.IO) {
+        val timeout = timeoutMs.coerceAtLeast(DEFAULT_TIMEOUT_MS)
         try {
-            withTimeoutOrNull(DEFAULT_TIMEOUT_MS) {
-                val r = runAsRoot("echo ok", DEFAULT_TIMEOUT_MS)
+            withTimeoutOrNull(timeout) {
+                val r = runAsRoot("echo ok", timeout)
                 r.isSuccess && r.stdout.trim() == "ok"
             } ?: false
         } catch (e: CancellationException) {
