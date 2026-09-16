@@ -41,14 +41,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.app.Activity
+import androidx.compose.ui.platform.LocalContext
 import com.devcode.terminal.DevCodeApp
 import com.devcode.terminal.core.chroot.ChrootManager
+import com.devcode.terminal.core.terminal.TerminalManager
+import com.devcode.terminal.service.WorkspaceService
 import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val fontSize by DevCodeApp.settings.fontSize.collectAsState(initial = 14f)
+    val context = LocalContext.current
+    val activity = context as? Activity
 
     LazyColumn(
         modifier = modifier
@@ -236,6 +242,38 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Lazily unmounts proc, sysfs, dev, devpts and sdcard from the chroot. Active sessions will be stopped first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                TerminalManager.sessions.value.toList().forEach { session ->
+                                    try {
+                                        session.stop()
+                                        TerminalManager.closeSession(session.id)
+                                    } catch (_: Throwable) {}
+                                }
+                                try { ChrootManager.unmountAll(force = true) } catch (_: Throwable) {}
+                                WorkspaceService.killAllSessionsAndUnmount(context)
+                                activity?.finishAndRemoveTask()
+                            }
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.PowerOff, null, Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("EXIT — STOP ALL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Stops all sessions, unmounts the rootfs, stops background service and closes the app. Normal back/home keeps sessions running.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -13,6 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PowerOff
+import com.devcode.terminal.service.WorkspaceService
+import androidx.compose.ui.platform.LocalContext
+import com.devcode.terminal.core.chroot.ChrootManager
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -145,6 +149,8 @@ private fun SessionConsole(session: TerminalSession, fontSize: Float, modifier: 
         }
     }
 
+    val context = LocalContext.current
+
     fun send() {
         val target = TerminalManager.active() ?: return
         if (target.id != session.id || command.isBlank() || sending) return
@@ -233,6 +239,31 @@ private fun SessionConsole(session: TerminalSession, fontSize: Float, modifier: 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        try {
+                            TerminalManager.sessions.value.toList().forEach { s ->
+                                try {
+                                    s.stop()
+                                    TerminalManager.closeSession(s.id)
+                                } catch (_: Throwable) {}
+                            }
+                            ChrootManager.unmountAll(force = true)
+                            WorkspaceService.killAllSessionsAndUnmount(context)
+                        } catch (_: Throwable) {}
+                    }
+                },
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                enabled = running,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Filled.PowerOff, null, Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("TERMINATE ALL", style = MaterialTheme.typography.labelSmall)
+            }
             OutlinedTextField(
                 value = command,
                 onValueChange = { command = it },

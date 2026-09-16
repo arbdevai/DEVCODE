@@ -123,10 +123,15 @@ object UbuntuManager {
     /**
      * Ensures /data/local/devcode exists and is owned by DEVCODE.
      *
-     * Older builds created an empty mount-point skeleton before the marker was
-     * written, so an unmarked base is claimable only when it contains no files
-     * or symlinks and every directory is one of the known empty mount points.
-     * Any unknown file, symlink, or non-empty directory fails closed.
+     * Security model:
+     * - Exact marker ownership is preferred (strict owner check).
+     * - If marker is missing or has a different owner (e.g., after APK reinstall or keystore update),
+     *   we attempt safe reclaim:
+     *   1. If a valid, functional Ubuntu rootfs exists (executable /bin/bash inside), we reclaim
+     *      ownership by updating the marker without touching user data.
+     *   2. If no valid rootfs exists, we allow claiming an empty base or an interrupted DEVCODE
+     *      skeleton (staging, cache, ubuntu.install, etc.).
+     *   3. Any foreign/unknown files outside DEVCODE's structure fail closed.
      */
     private fun ensureOwnedBase() {
         val command = """
@@ -134,6 +139,9 @@ object UbuntuManager {
             BASE=/data/local/devcode
             MARKER=$OWNER_MARKER
             OWNER=$OWNER_VALUE
+            ROOTFS=$INSTALL_DIR
+            TMP_INSTALL="${INSTALL_DIR}.install"
+
             if [ -L "${'$'}BASE" ]; then echo "base directory is a symlink"; exit 3; fi
             if [ ! -e "${'$'}BASE" ]; then
                 mkdir -p "${'$'}BASE"
@@ -141,15 +149,38 @@ object UbuntuManager {
                 echo "base path is not a directory"; exit 3
             fi
             if [ -L "${'$'}MARKER" ]; then echo "ownership marker is a symlink"; exit 3; fi
+
+            # 1. Direct valid marker match
             if [ -f "${'$'}MARKER" ]; then
-                [ "${'$'}(cat "${'$'}MARKER" 2>/dev/null)" = "${'$'}OWNER" ] || {
-                    echo "ownership marker has a different owner"; exit 3;
-                }
-                echo OK; exit 0
+                if [ "${'$'}(cat "${'$'}MARKER" 2>/dev/null)" = "${'$'}OWNER" ]; then
+                    echo OK; exit 0
+                fi
             fi
-            # Claim only the empty skeleton left by a prior interrupted setup.
-            bad_file="${'$'}(find "${'$'}BASE" -mindepth 1 \( -type f -o -type l \) -print -quit 2>/dev/null || true)"
-            [ -z "${'$'}bad_file" ] || { echo "unmarked base contains a file or symlink"; exit 3; }
+
+            # 2. Safe reclaim: if a valid rootfs is present (reinstall over existing data)
+            if [ -x "${'$'}ROOTFS/bin/bash" ]; then
+                tmp="${'$'}MARKER.tmp.${'$'}${'$'}"
+                printf '%s\n' "${'$'}OWNER" > "${'$'}tmp"
+                chmod 600 "${'$'}tmp"
+                mv -f "${'$'}tmp" "${'$'}MARKER"
+                echo "OK:reclaimed_existing_rootfs"; exit 0
+            fi
+
+            # 3. Clean up any stale interrupted .install directory
+            if [ -d "${'$'}TMP_INSTALL" ] && [ ! -L "${'$'}TMP_INSTALL" ]; then
+                rm -rf "${'$'}TMP_INSTALL" 2>/dev/null || true
+            fi
+
+            # 4. Check for foreign files (allow only DEVCODE staging tarballs and marker)
+            for f in ${'$'}(find "${'$'}BASE" -mindepth 1 -maxdepth 3 \( -type f -o -type l \) -print 2>/dev/null || true); do
+                rel=${'$'}{f#"${'$'}BASE"/}
+                case "${'$'}rel" in
+                    .devcode-owner*|staging/ubuntu-base.tar.gz*|cache/*) ;;
+                    *) echo "unmarked base contains foreign file: ${'$'}rel"; exit 3 ;;
+                esac
+            done
+
+            # 5. Check for foreign directories
             allowed="ubuntu ubuntu/proc ubuntu/sys ubuntu/dev ubuntu/dev/pts ubuntu/etc ubuntu/run ubuntu/run/devcode ubuntu/run/devcode/sessions ubuntu/sdcard staging cache"
             for d in ${'$'}(find "${'$'}BASE" -mindepth 1 -type d -print 2>/dev/null || true); do
                 rel=${'$'}{d#"${'$'}BASE"/}
@@ -157,8 +188,10 @@ object UbuntuManager {
                 for a in ${'$'}allowed; do [ "${'$'}rel" = "${'$'}a" ] && ok=yes; done
                 [ "${'$'}ok" = yes ] || { echo "unmarked base has unknown directory: ${'$'}rel"; exit 3; }
             done
+
+            # 6. Write ownership marker
             tmp="${'$'}MARKER.tmp.${'$'}${'$'}"
-            printf '%s\\n' "${'$'}OWNER" > "${'$'}tmp"
+            printf '%s\n' "${'$'}OWNER" > "${'$'}tmp"
             chmod 600 "${'$'}tmp"
             mv -f "${'$'}tmp" "${'$'}MARKER"
             echo OK
@@ -166,10 +199,36 @@ object UbuntuManager {
         val (code, output) = su(command, 30_000L)
         if (code != 0) {
             throw IllegalStateException(
-                "cannot verify /data/local/devcode ownership: ${output.ifBlank { "unmarked directory contains data; remove it manually only if intended" }}"
+                "cannot verify /data/local/devcode ownership: ${output.ifBlank { "unmarked directory contains foreign data" }}"
             )
         }
     }
+
+    // ---------- root caching ----------
+
+    @Volatile private var isRootCached: Boolean? = null
+    @Volatile private var rootCacheTime: Long = 0L
+    private const val ROOT_CACHE_TTL_MS = 60_000L
+
+    /**
+     * Checks whether root is available, using a 60-second in-memory cache to prevent
+     * repeating root authorization prompts during frequent navigation or status checks.
+     */
+    suspend fun checkRoot(forceRefresh: Boolean = false, timeoutMs: Long = 10_000L): Boolean {
+        val now = System.currentTimeMillis()
+        if (!forceRefresh) {
+            val cached = isRootCached
+            if (cached != null && (now - rootCacheTime) < ROOT_CACHE_TTL_MS) {
+                return cached
+            }
+        }
+        val granted = RootManager.requestRoot(timeoutMs)
+        isRootCached = granted
+        rootCacheTime = now
+        return granted
+    }
+
+    // ---------- status ----------
 
     private fun readUsageBytes(): Long {
         return try {
@@ -193,10 +252,52 @@ object UbuntuManager {
         }
     }
 
-    // ---------- status ----------
-
+    /**
+     * Batched status check running a single `su` command to inspect installation,
+     * mounts, and storage space in one go. Avoids multiple su process spawns.
+     */
     suspend fun refreshStatus() = withContext(Dispatchers.IO) {
         try {
+            val script = """
+                set -e
+                R="$INSTALL_DIR"
+                if [ -x "${'$'}R/bin/bash" ]; then inst=1; else inst=0; fi
+                if grep -Fq "${'$'}R" /proc/mounts 2>/dev/null; then mnt=1; else mnt=0; fi
+                used=${'$'}(du -sb "${'$'}R" 2>/dev/null | awk '{print ${'$'}1}' || echo 0)
+                [ -n "${'$'}used" ] || used=0
+                avail=${'$'}((df -k "${'$'}R" 2>/dev/null || df -k /data 2>/dev/null) | tail -1 | awk '{print ${'$'}4 * 1024}')
+                [ -n "${'$'}avail" ] || avail=0
+                echo "${'$'}inst|${'$'}mnt|${'$'}used|${'$'}avail"
+            """.trimIndent()
+
+            val (code, out) = su(script, 10_000L)
+            if (code == 0 && out.contains("|")) {
+                val parts = out.trim().lines().last().split("|")
+                if (parts.size >= 4) {
+                    val installed = parts[0] == "1"
+                    val used = parts[2].toLongOrNull() ?: 0L
+                    val avail = parts[3].toLongOrNull() ?: 0L
+
+                    isRootCached = true
+                    rootCacheTime = System.currentTimeMillis()
+
+                    _state.update {
+                        val transitional = it.status == InstallStatus.DOWNLOADING ||
+                            it.status == InstallStatus.VERIFYING ||
+                            it.status == InstallStatus.EXTRACTING
+                        it.copy(
+                            status = if (transitional) it.status
+                            else if (installed) InstallStatus.INSTALLED
+                            else InstallStatus.NOT_INSTALLED,
+                            storageUsedBytes = used,
+                            storageAvailBytes = avail
+                        )
+                    }
+                    return@withContext
+                }
+            }
+
+            // Fallback if batch format failed
             val installed = rootfsExists()
             val used = readUsageBytes()
             val avail = readAvailBytes()
@@ -566,6 +667,33 @@ object UbuntuManager {
                 true
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, message = "Remove error: ${e.message}") }
+                false
+            }
+        }
+    }
+
+    /**
+     * Emergency fallback removal: deletes the rootfs and staging files if extraction
+     * was corrupted and ownership check fails, provided no chroot session or mount is active.
+     */
+    suspend fun forceRemove(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext ChrootManager.withEnvironmentLock {
+            try {
+                _state.update { it.copy(busy = true, message = "Force cleaning corrupted rootfs...") }
+                requireIdle()
+
+                val (code, _) = su(
+                    "rm -rf $INSTALL_DIR ${INSTALL_DIR}.install $TARBALL $STAGING_DIR $CACHE_DIR",
+                    300_000L
+                )
+                try { privateTarball().delete() } catch (_: Exception) {}
+                try { privateTarballPart().delete() } catch (_: Exception) {}
+
+                _state.update { it.copy(busy = false, downloadProgress = 0f, message = "Cleaned corrupted rootfs") }
+                refreshStatus()
+                code == 0
+            } catch (e: Exception) {
+                _state.update { it.copy(busy = false, message = "Force remove failed: ${e.message}") }
                 false
             }
         }
