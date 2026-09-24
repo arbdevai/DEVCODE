@@ -100,13 +100,18 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 5. Hasil Rilis APK Terbaru (Host-Side Provisioning)
-- **GitHub Release Tag**: `build-14`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-14`
-- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-14/app-debug.apk`
-- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 14, VersionName `1.0.14`
-- **Changelog**:
-  - Full Host-Side Zero-Chroot Provisioning (DNS, passwd, group, shadow, bashrc, workspace).
-  - Smart multi-root binary chroot detector (toybox, Magisk, KernelSU, APatch).
-  - Eliminasi total error "Bootstrap failed: unable to configure user or DNS".
+## 6. Perbaikan Terminal Permissions, Passwordless Sudo & Validation Lock
+
+### A. Masalah Status Validation Lock
+- `du -sb` tidak didukung oleh Toybox Android sehingga memicu error dan menggagalkan status check.
+- Status check diubah menggunakan `du -sk` dikali 1024 yang kompatibel universal di seluruh Android.
+- Menghapus kunci status `transitional` saat instalasi selesai sehingga status langsung terpromosi menjadi `INSTALLED`.
+
+### B. Masalah Session PID Permission Denied
+- Folder `/run/devcode/sessions` dibuat oleh root dengan permission 755 sehingga user `coder` ditolak saat menulis PID file session.
+- Diperbaiki dengan mengatur permission `chmod 777` pada direktori session dan membuat marker file dengan `chmod 666`.
+
+### C. Masalah Apt Permission Denied & Passwordless Sudo
+- User `coder` kini memiliki konfigurasi passwordless sudo di `/etc/sudoers.d/90-coder` (`coder ALL=(ALL) NOPASSWD:ALL`).
+- Direktori `/var/lib/apt/lists/partial` dan `/var/cache/apt/archives/partial` dibuat dengan permission yang tepat agar `sudo apt update` dan `sudo apt upgrade` bekerja mulus.
+- Menambahkan konfigurasi `.inputrc` (`set enable-bracketed-paste off`) untuk menghilangkan karakter ANSI `[?2004h` pada prompt bash.

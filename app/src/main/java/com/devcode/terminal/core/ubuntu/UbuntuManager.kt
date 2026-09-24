@@ -233,7 +233,7 @@ object UbuntuManager {
 
     private fun readUsageBytes(): Long {
         return try {
-            val (code, out) = su("du -sb $INSTALL_DIR 2>/dev/null")
+            val (code, out) = su("du -sk $INSTALL_DIR 2>/dev/null | awk '{print ${'$'}1 * 1024}'")
             if (code != 0) return 0L
             out.trim().split(Regex("\\s+")).firstOrNull()?.toLongOrNull() ?: 0L
         } catch (_: Exception) {
@@ -257,16 +257,15 @@ object UbuntuManager {
      * Batched status check running a single `su` command to inspect installation,
      * mounts, and storage space in one go. Avoids multiple su process spawns.
      */
-    suspend fun refreshStatus() = withContext(Dispatchers.IO) {
+    suspend fun refreshStatus(forceTransition: Boolean = false) = withContext(Dispatchers.IO) {
         try {
             val script = """
-                set -e
                 R="$INSTALL_DIR"
-                if [ -x "${'$'}R/bin/bash" ]; then inst=1; else inst=0; fi
+                if [ -x "${'$'}R/bin/bash" ] || [ -x "${'$'}R/usr/bin/bash" ]; then inst=1; else inst=0; fi
                 if grep -Fq "${'$'}R" /proc/mounts 2>/dev/null; then mnt=1; else mnt=0; fi
-                used=${'$'}(du -sb "${'$'}R" 2>/dev/null | awk '{print ${'$'}1}' || echo 0)
+                used=${'$'}(du -sk "${'$'}R" 2>/dev/null | awk '{print ${'$'}1 * 1024}' || echo 0)
                 [ -n "${'$'}used" ] || used=0
-                avail=${'$'}((df -k "${'$'}R" 2>/dev/null || df -k /data 2>/dev/null) | tail -1 | awk '{print ${'$'}4 * 1024}')
+                avail=${'$'}((df -k "${'$'}R" 2>/dev/null || df -k /data 2>/dev/null) | tail -1 | awk '{print ${'$'}4 * 1024}' || echo 0)
                 [ -n "${'$'}avail" ] || avail=0
                 echo "${'$'}inst|${'$'}mnt|${'$'}used|${'$'}avail"
             """.trimIndent()
@@ -283,11 +282,13 @@ object UbuntuManager {
                     rootCacheTime = System.currentTimeMillis()
 
                     _state.update {
-                        val transitional = it.status == InstallStatus.DOWNLOADING ||
+                        val transitional = !forceTransition && (
+                            it.status == InstallStatus.DOWNLOADING ||
                             it.status == InstallStatus.VERIFYING ||
                             it.status == InstallStatus.EXTRACTING
+                        )
                         it.copy(
-                            status = if (transitional) it.status
+                            status = if (transitional && !installed) it.status
                             else if (installed) InstallStatus.INSTALLED
                             else InstallStatus.NOT_INSTALLED,
                             storageUsedBytes = used,
@@ -303,11 +304,13 @@ object UbuntuManager {
             val used = readUsageBytes()
             val avail = readAvailBytes()
             _state.update {
-                val transitional = it.status == InstallStatus.DOWNLOADING ||
+                val transitional = !forceTransition && (
+                    it.status == InstallStatus.DOWNLOADING ||
                     it.status == InstallStatus.VERIFYING ||
                     it.status == InstallStatus.EXTRACTING
+                )
                 it.copy(
-                    status = if (transitional) it.status
+                    status = if (transitional && !installed) it.status
                     else if (installed) InstallStatus.INSTALLED
                     else InstallStatus.NOT_INSTALLED,
                     storageUsedBytes = used,
@@ -628,9 +631,16 @@ object UbuntuManager {
                 try { privateTarball().delete() } catch (_: Exception) {}
                 try { privateTarballPart().delete() } catch (_: Exception) {}
 
-                refreshStatus()
-                val ok = _state.value.status == InstallStatus.INSTALLED
-                _state.update { it.copy(busy = false, message = if (ok) "Ubuntu 24.04 ARM64 installed" else "Install finished but validation failed") }
+                refreshStatus(forceTransition = true)
+                val ok = rootfsExists() || _state.value.status == InstallStatus.INSTALLED
+                _state.update {
+                    it.copy(
+                        status = if (ok) InstallStatus.INSTALLED else InstallStatus.NOT_INSTALLED,
+                        busy = false,
+                        downloadProgress = 1f,
+                        message = if (ok) "Ubuntu 24.04 ARM64 installed and ready!" else "Installation validation failed"
+                    )
+                }
                 ok
             } catch (e: Exception) {
                 _state.update { it.copy(status = InstallStatus.NOT_INSTALLED, busy = false, message = "Install error: ${e.message}") }
@@ -656,8 +666,8 @@ object UbuntuManager {
                     _state.update { it.copy(busy = false, message = "Repair failed: bootstrap error") }
                     return@withEnvironmentLock false
                 }
-                refreshStatus()
-                _state.update { it.copy(busy = false, message = "Repair complete: user/config restored, data preserved") }
+                refreshStatus(forceTransition = true)
+                _state.update { it.copy(status = InstallStatus.INSTALLED, busy = false, message = "Repair complete: user/config restored, data preserved") }
                 true
             } catch (e: Exception) {
                 _state.update { it.copy(busy = false, message = "Repair error: ${e.message}") }

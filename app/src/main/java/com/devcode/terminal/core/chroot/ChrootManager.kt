@@ -144,6 +144,13 @@ object ChrootManager {
                 [ -e "${'$'}R/dev/zero" ] || mknod -m 666 "${'$'}R/dev/zero" c 1 5 2>/dev/null || true
                 [ -e "${'$'}R/dev/random" ] || mknod -m 666 "${'$'}R/dev/random" c 1 8 2>/dev/null || true
                 [ -e "${'$'}R/dev/urandom" ] || mknod -m 666 "${'$'}R/dev/urandom" c 1 9 2>/dev/null || true
+                chmod 666 "${'$'}R/dev/pts/ptmx" 2>/dev/null || true
+                rm -f "${'$'}R/dev/ptmx" 2>/dev/null || true
+                ln -s pts/ptmx "${'$'}R/dev/ptmx" 2>/dev/null || true
+
+                # Session runtime directory with universal write permission
+                mkdir -p "${'$'}R$SESSION_RUN_DIR"
+                chmod 777 "${'$'}R$SESSION_RUN_DIR" 2>/dev/null || true
 
                 # 5. Shared storage (/sdcard) - only mount for the primary installation
                 if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
@@ -291,7 +298,7 @@ object ChrootManager {
             val escapedCmd = cmd.replace("'", "'\\''")
             val markerFile = "$SESSION_RUN_DIR/$sessionId.pid"
 
-            val fullCommand = "$DEFAULT_ENV; $chrootBin $UBUNTU_ROOT /bin/sh -c 'mkdir -p $SESSION_RUN_DIR && /bin/su - coder -c \"echo \\$\\$ > $markerFile; exec setsid $escapedCmd\"'"
+            val fullCommand = "$DEFAULT_ENV; mkdir -p $UBUNTU_ROOT$SESSION_RUN_DIR; chmod 777 $UBUNTU_ROOT$SESSION_RUN_DIR; $chrootBin $UBUNTU_ROOT /bin/sh -c '/bin/su - coder -c \"echo \\$\\$ > $markerFile; exec setsid $escapedCmd\"'"
 
             val process = ProcessBuilder("su", "-c", fullCommand)
                 .redirectErrorStream(false)
@@ -332,6 +339,9 @@ object ChrootManager {
                 val fullCommand = """
                     $DEFAULT_ENV
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
+                    chmod 777 "$UBUNTU_ROOT$SESSION_RUN_DIR" 2>/dev/null || true
+                    touch "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
+                    chmod 666 "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
                     if [ -x "$UBUNTU_ROOT/usr/bin/script" ]; then
                         $chrootBin "$UBUNTU_ROOT" /usr/bin/script -qefc "/bin/su - coder -c 'echo \$\$ > $markerFile; exec /bin/bash -i'" /dev/null
                     else

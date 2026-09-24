@@ -108,6 +108,20 @@ object SetupWizard {
                     fi
                 fi
 
+                # Passwordless sudo for coder user
+                mkdir -p "${'$'}R/etc/sudoers.d"
+                echo 'coder ALL=(ALL) NOPASSWD:ALL' > "${'$'}R/etc/sudoers.d/90-coder"
+                chmod 440 "${'$'}R/etc/sudoers.d/90-coder" 2>/dev/null || true
+
+                # Ensure essential apt and temporary directories exist with correct permissions
+                mkdir -p "${'$'}R/var/lib/apt/lists/partial"
+                mkdir -p "${'$'}R/var/cache/apt/archives/partial"
+                mkdir -p "${'$'}R/var/log"
+                mkdir -p "${'$'}R/tmp" "${'$'}R/var/tmp"
+                chmod 1777 "${'$'}R/tmp" "${'$'}R/var/tmp" 2>/dev/null || true
+                chmod 755 "${'$'}R/var/lib/apt/lists" "${'$'}R/var/lib/apt/lists/partial" 2>/dev/null || true
+                chmod 755 "${'$'}R/var/cache/apt/archives/partial" 2>/dev/null || true
+
                 # 2. Primary 'coder' user in /etc/passwd (UID 1000, GID 1000)
                 [ -f "${'$'}R/etc/passwd" ] || touch "${'$'}R/etc/passwd"
                 if ! grep -q '^coder:' "${'$'}R/etc/passwd" 2>/dev/null; then
@@ -174,6 +188,9 @@ export TERM=xterm-256color
 cd /home/coder/projects 2>/dev/null || true
 EOF
                 fi
+                # Disable bracketed paste so readline does not print [?2004h / [?2004l
+                echo 'set enable-bracketed-paste off' > "${'$'}R/home/coder/.inputrc" 2>/dev/null || true
+                echo 'set enable-bracketed-paste off' > "${'$'}R/etc/inputrc" 2>/dev/null || true
                 chown -R 1000:1000 "${'$'}R/home/coder" 2>/dev/null || true
                 chmod 644 "${'$'}BASHRC" 2>/dev/null || true
             """.trimIndent()
