@@ -123,3 +123,19 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 - `UpdateManager` memeriksa GitHub Releases API secara otomatis.
 - Pengguna dapat mengecek update dan mengunduh APK langsung dari dalam aplikasi dengan progress bar real-time.
 - Mendukung **1-Click Silent Root Install** (`pm install -r -d`) serta fallback ke Android Package Installer Intent melalui `FileProvider`. Pengguna tidak perlu lagi membuka browser GitHub secara manual!
+
+---
+
+## 8. Hasil Rilis APK Terbaru (Build 19)
+- **GitHub Release Tag**: `build-19`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-19`
+- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-19/app-debug.apk`
+- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
+- **Version**: VersionCode 19, VersionName `1.0.19`
+- **Changelog**:
+  - Total isolasi `/dev` via dedicated `tmpfs` mandiri (tidak merusak host `/dev/ptmx`, Termux aman 100%).
+  - PATH environment Ubuntu (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) di-export otomatis di semua eksekusi chroot, mengatasi `apt-get` exit=127.
+  - Sudo bridge `/usr/local/bin/sudo` + PAM wheel trust memungkinkan `sudo apt update` dan `sudo apt install` tanpa password.
+  - CLI manager `/data/local/devcode/bin/devcode` (stop, status, uninstall) dan integrasi di UI.
+  - Fitur In-App Check Update & Auto-Install APK langsung di dalam aplikasi.
+  - Live Step-by-Step Logging di layar Ubuntu Hub.
