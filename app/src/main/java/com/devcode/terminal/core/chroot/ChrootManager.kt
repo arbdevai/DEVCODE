@@ -228,6 +228,54 @@ object ChrootManager {
         unmountLocked(force)
     }
 
+    // ---- Chroot Binary Resolution ----------------------------------------
+
+    @Volatile private var resolvedChrootCmd: String? = null
+
+    /**
+     * Resolves the valid chroot command on Android host across diverse root environments:
+     * 1. Standard PATH: command -v chroot
+     * 2. System binaries: /system/bin/chroot, /system/xbin/chroot
+     * 3. Toybox chroot: /system/bin/toybox chroot
+     * 4. Magisk busybox: /data/adb/magisk/busybox chroot
+     * 5. KernelSU busybox: /data/adb/ksu/bin/busybox chroot
+     * 6. APatch busybox: /data/adb/ap/bin/busybox chroot
+     * 7. Fallback: "chroot"
+     */
+    suspend fun getChrootExecutable(): String = withContext(Dispatchers.IO) {
+        val cached = resolvedChrootCmd
+        if (cached != null) return@withContext cached
+
+        val probeScript = """
+            if command -v chroot >/dev/null 2>&1; then
+                echo "chroot"
+            elif [ -x /system/bin/chroot ]; then
+                echo "/system/bin/chroot"
+            elif [ -x /system/xbin/chroot ]; then
+                echo "/system/xbin/chroot"
+            elif /system/bin/toybox chroot --help >/dev/null 2>&1 || [ -x /system/bin/toybox ]; then
+                if /system/bin/toybox chroot / /system/bin/sh -c 'true' 2>/dev/null; then
+                    echo "/system/bin/toybox chroot"
+                fi
+            elif [ -x /data/adb/magisk/busybox ]; then
+                echo "/data/adb/magisk/busybox chroot"
+            elif [ -x /data/adb/ksu/bin/busybox ]; then
+                echo "/data/adb/ksu/bin/busybox chroot"
+            elif [ -x /data/adb/ap/bin/busybox ]; then
+                echo "/data/adb/ap/bin/busybox chroot"
+            elif command -v busybox >/dev/null 2>&1; then
+                echo "busybox chroot"
+            else
+                echo "chroot"
+            fi
+        """.trimIndent()
+
+        val r = RootManager.runAsRoot(probeScript, 5_000L)
+        val resolved = r.stdout.lines().firstOrNull { it.isNotBlank() }?.trim() ?: "chroot"
+        resolvedChrootCmd = resolved
+        resolved
+    }
+
     // ---- Session management -----------------------------------------------
 
     /**
@@ -238,11 +286,12 @@ object ChrootManager {
         val sessionId = UUID.randomUUID().toString()
         try {
             mountAll()
+            val chrootBin = getChrootExecutable()
 
             val escapedCmd = cmd.replace("'", "'\\''")
             val markerFile = "$SESSION_RUN_DIR/$sessionId.pid"
 
-            val fullCommand = "$DEFAULT_ENV; chroot $UBUNTU_ROOT /bin/sh -c 'mkdir -p $SESSION_RUN_DIR && /bin/su - coder -c \"echo \\$\\$ > $markerFile; exec setsid $escapedCmd\"'"
+            val fullCommand = "$DEFAULT_ENV; $chrootBin $UBUNTU_ROOT /bin/sh -c 'mkdir -p $SESSION_RUN_DIR && /bin/su - coder -c \"echo \\$\\$ > $markerFile; exec setsid $escapedCmd\"'"
 
             val process = ProcessBuilder("su", "-c", fullCommand)
                 .redirectErrorStream(false)
@@ -276,6 +325,7 @@ object ChrootManager {
                 if (!mountLocked()) {
                     return@withContext null
                 }
+                val chrootBin = getChrootExecutable()
 
                 val markerFile = "$SESSION_RUN_DIR/$id.pid"
                 // Interactive command with PTY wrapper support via script -qefc
@@ -283,9 +333,9 @@ object ChrootManager {
                     $DEFAULT_ENV
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
                     if [ -x "$UBUNTU_ROOT/usr/bin/script" ]; then
-                        chroot "$UBUNTU_ROOT" /usr/bin/script -qefc "/bin/su - coder -c 'echo \$\$ > $markerFile; exec /bin/bash -i'" /dev/null
+                        $chrootBin "$UBUNTU_ROOT" /usr/bin/script -qefc "/bin/su - coder -c 'echo \$\$ > $markerFile; exec /bin/bash -i'" /dev/null
                     else
-                        chroot "$UBUNTU_ROOT" /bin/sh -c "/bin/su - coder -c 'echo \$\$ > $markerFile; exec setsid /bin/bash -i'"
+                        $chrootBin "$UBUNTU_ROOT" /bin/sh -c "/bin/su - coder -c 'echo \$\$ > $markerFile; exec setsid /bin/bash -i'"
                     fi
                 """.trimIndent()
 

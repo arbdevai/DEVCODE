@@ -58,23 +58,42 @@ User memiliki chroot lain yang sudah aktif di ponsel. DEVCODE **TIDAK BOLEH BENT
 
 ---
 
-## 3. Pelacakan Implementasi & Status
+## 3. Arsitektur Host-Side Provisioning & Chroot Resolver
+
+### A. Host-Side Provisioning (Zero-Chroot Bootstrap)
+Untuk memastikan bootstrap instalasi 100% tahan banting di seluruh perangkat Android:
+1. `SetupWizard.ensureDns(root)`:
+   - Langsung menulis `$root/etc/resolv.conf` dari sisi host lewat akses root (`nameserver 8.8.8.8` dan `1.1.1.1`).
+2. `SetupWizard.ensureUser(root)`:
+   - Langsung menulis `$root/etc/passwd` (`coder:x:1000:1000:coder:/home/coder:/bin/bash`).
+   - Langsung menulis `$root/etc/group` (`aid_inet:x:3003:coder`, `aid_net_raw:x:3004:coder`, `coder:x:1000:`).
+   - Langsung menulis `$root/etc/shadow`.
+3. `SetupWizard.ensureWorkspace(root)` & `ensureShellConfig(root)`:
+   - Membuat direktori `$root/home/coder/projects` dan `.npm-global`.
+   - Mengatur kepemilikan numerik `chown -R 1000:1000` langsung dari host root.
+   - Menulis file `$root/home/coder/.bashrc` dengan konfigurasi PATH dan workspace default.
+
+### B. Smart Chroot Binary Detection (`ChrootManager.getChrootExecutable()`)
+Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. Deteksi otomatis mencakup:
+1. `command -v chroot` (bawaan PATH)
+2. `/system/bin/chroot` & `/system/xbin/chroot`
+3. `/system/bin/toybox chroot`
+4. `/data/adb/magisk/busybox chroot` (Magisk root)
+5. `/data/adb/ksu/bin/busybox chroot` (KernelSU root)
+6. `/data/adb/ap/bin/busybox chroot` (APatch root)
+7. `busybox chroot`
+
+---
+
+## 4. Pelacakan Implementasi & Status
 
 | No | Komponen / Task | Deskripsi Detail | Status |
 |---|---|---|---|
 | 1 | **Spesifikasi & Dokumen** | Menyusun `docs/ROADMAP_AND_SPEC.md` | Selesai |
 | 2 | **Isolasi Mount Unik** | `ChrootManager.kt`: `--make-rprivate`, `newinstance devpts`, unmount presisi hanya untuk DEVCODE | Selesai |
-| 3 | **Perbaikan Instalasi Chroot** | `UbuntuManager.kt` & `SetupWizard.kt`: Mount virtual fs sebelum bootstrap user, perbaikan whitelist base, logging jelas | Selesai |
-| 4 | **Modernisasi UI/UX 2026** | `Theme.kt`, `Nav.kt`, Screen (Dashboard, Ubuntu, Terminal, Settings): Edge-to-edge padding, tipografi Sans-serif + Monospace code, tombol keyboard terminal mobile, layout aman | Selesai |
-| 5 | **Build & Dynamic Versioning** | `build.gradle.kts`: Dynamic `versionCode`, signing config release konsisten | Selesai |
-| 6 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Selesai (Run #12 sukses) |
-| 7 | **Delivery Link APK** | Memberikan link unduhan langsung APK rilis ke user | Selesai (Release build-12) |
-
----
-
-## 4. Hasil Rilis APK Terbaru
-- **GitHub Release Tag**: `build-12`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-12`
-- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-12/app-debug.apk`
-- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 12, VersionName `1.0.12`
+| 3 | **Direct Host-Side Provisioning** | `SetupWizard.kt`: Zero-chroot bootstrap langsung ke passwd, group, shadow, resolv.conf, bashrc | Selesai |
+| 4 | **Smart Chroot Detection** | `ChrootManager.kt`: `getChrootExecutable()` auto-detect toybox, Magisk, KSU, APatch | Selesai |
+| 5 | **Modernisasi UI/UX 2026** | `Theme.kt`, `Nav.kt`, Screen: Edge-to-edge padding, tipografi modern, accessory keyboard bar terminal | Selesai |
+| 6 | **Build & Dynamic Versioning** | `build.gradle.kts`: Dynamic `versionCode`, signing config release konsisten | Selesai |
+| 7 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Sedang Dikerjakan |
+| 8 | **Delivery Link APK Baru** | Memberikan link unduhan langsung APK rilis ke user | Menunggu CI Selesai |

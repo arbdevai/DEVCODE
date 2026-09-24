@@ -574,29 +574,19 @@ object UbuntuManager {
                 return@withContext false
             }
 
-            _state.update { it.copy(message = "Configuring isolated environment & user...") }
+            _state.update { it.copy(message = "Configuring DNS, user coder & workspace...") }
 
-            // Mount isolated virtual filesystems in tmpDir so useradd & DNS work reliably
-            val mountOk = ChrootManager.mountTargetLocked(tmpDir)
-            if (!mountOk) {
-                ChrootManager.unmountTargetLocked(tmpDir, force = true)
-                su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Failed to mount chroot virtual filesystems for setup") }
-                return@withContext false
-            }
-
-            // Mandatory bootstrap: coder user, DNS, workspace, shell config
+            // Direct host-side provisioning: DNS, user coder (UID 1000), GIDs (3003, 3004), workspace & shell config
             val bootOk = try {
                 SetupWizard.bootstrap(tmpDir)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                _state.update { it.copy(message = "Bootstrap exception: ${e.message}") }
                 false
-            } finally {
-                ChrootManager.unmountTargetLocked(tmpDir, force = true)
             }
 
             if (!bootOk) {
                 su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Bootstrap failed: unable to configure user or DNS") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Bootstrap failed: unable to write user or DNS configuration") }
                 return@withContext false
             }
 

@@ -8,17 +8,15 @@ import kotlinx.coroutines.withContext
 /**
  * Bootstrap and development environment provisioning wizard for the Ubuntu rootfs.
  *
- * Configures:
- *   - DNS resolution (/etc/resolv.conf, replaces symlink safely)
- *   - Android networking GIDs (aid_inet: 3003, aid_net_raw: 3004)
- *     which Android requires for AF_INET sockets under non-root UIDs
- *   - Standard 'coder' user with Android network groups (NO passwordless sudo)
- *   - Workspace directory at /home/coder/projects
- *   - Essential development toolchain packages (optional selection)
+ * Provisioning Architecture:
+ * - Bootstrap (DNS, user 'coder', Android network GIDs, workspace, shell config) is performed
+ *   directly from the Android host filesystem using root permissions without invoking chroot.
+ * - This eliminates dependencies on chroot/bash/useradd binaries during the initial installation.
+ * - Chroot is only used for apt package installations and interactive terminal sessions.
  */
 object SetupWizard {
 
-    private const val ROOT_TIMEOUT_MS = 300_000L // 5 min for user/group ops
+    private const val ROOT_TIMEOUT_MS = 60_000L   // 1 min for host-side file operations
     private const val APT_TIMEOUT_MS = 1_800_000L // 30 min for apt
 
     /**
@@ -40,15 +38,15 @@ object SetupWizard {
         "ca-certificates"
     )
 
-    private fun chrootCmd(script: String, root: String = UbuntuManager.INSTALL_DIR): String {
+    private suspend fun chrootCmd(script: String, root: String = UbuntuManager.INSTALL_DIR): String {
+        val chrootBin = ChrootManager.getChrootExecutable()
         val escaped = script.replace("'", "'\\''")
-        return "if [ -x '$root/bin/bash' ] || [ -x '$root/usr/bin/bash' ]; then chroot '$root' /bin/bash -c '$escaped'; else chroot '$root' /bin/sh -c '$escaped'; fi"
+        return "if [ -x '$root/bin/bash' ] || [ -x '$root/usr/bin/bash' ]; then $chrootBin '$root' /bin/bash -c '$escaped'; else $chrootBin '$root' /bin/sh -c '$escaped'; fi"
     }
 
     /**
-     * Mandatory bootstrap: DNS + user + workspace + shell config.
-     * @param root chroot path (live INSTALL_DIR for repair, temp dir during install).
-     * Assumes virtual filesystems (/dev, /proc) are mounted if available.
+     * Direct host-side bootstrap: DNS + user + workspace + shell config.
+     * Operates directly on the host filesystem path [root] without invoking chroot.
      */
     suspend fun bootstrap(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -63,17 +61,20 @@ object SetupWizard {
     }
 
     /**
-     * Configures DNS inside the chroot environment so apt and network utilities work.
-     * Replaces symlink safely (removes link itself, writes regular file).
+     * Configures DNS directly in [root]/etc/resolv.conf from the host.
+     * Replaces symlink safely with static DNS entries.
      */
     suspend fun ensureDns(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
-                mkdir -p /etc
-                if [ -L /etc/resolv.conf ]; then rm -f /etc/resolv.conf; fi
-                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf
+                R="$root"
+                mkdir -p "${'$'}R/etc"
+                rm -f "${'$'}R/etc/resolv.conf" 2>/dev/null || true
+                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}R/etc/resolv.conf"
+                chmod 644 "${'$'}R/etc/resolv.conf" 2>/dev/null || true
+                [ -f "${'$'}R/etc/resolv.conf" ]
             """.trimIndent()
-            val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
+            val result = RootManager.runAsRoot(script, ROOT_TIMEOUT_MS)
             result.isSuccess
         } catch (_: Exception) {
             false
@@ -81,26 +82,50 @@ object SetupWizard {
     }
 
     /**
-     * Creates Android networking groups and the primary 'coder' user.
-     * No passwordless sudo — root actions go through the app.
+     * Provisions Android networking groups and the primary 'coder' user
+     * directly into [root]/etc/passwd, [root]/etc/group, and [root]/etc/shadow.
+     *
+     * Required Android Network GIDs:
+     * - 3003 (aid_inet): required by Android kernel to open AF_INET sockets.
+     * - 3004 (aid_net_raw): required for raw socket / ping operations.
      */
     suspend fun ensureUser(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
-                groupadd -g 3003 aid_inet 2>/dev/null || true
-                groupadd -g 3004 aid_net_raw 2>/dev/null || true
+                R="$root"
+                mkdir -p "${'$'}R/etc"
 
-                if ! id -u coder >/dev/null 2>&1; then
-                    useradd -m -s /bin/bash -u 1000 coder 2>/dev/null || \
-                    useradd -m -s /bin/bash coder 2>/dev/null || \
-                    useradd -m coder 2>/dev/null || true
+                # 1. Android network groups & coder group in /etc/group
+                [ -f "${'$'}R/etc/group" ] || touch "${'$'}R/etc/group"
+                grep -q '^aid_inet:' "${'$'}R/etc/group" 2>/dev/null || echo 'aid_inet:x:3003:coder' >> "${'$'}R/etc/group"
+                grep -q '^aid_net_raw:' "${'$'}R/etc/group" 2>/dev/null || echo 'aid_net_raw:x:3004:coder' >> "${'$'}R/etc/group"
+                grep -q '^coder:' "${'$'}R/etc/group" 2>/dev/null || echo 'coder:x:1000:' >> "${'$'}R/etc/group"
+
+                # Add coder to sudo group if sudo exists
+                if grep -q '^sudo:' "${'$'}R/etc/group" 2>/dev/null; then
+                    if ! grep -E '^sudo:.*coder' "${'$'}R/etc/group" >/dev/null 2>&1; then
+                        sed -i 's/^sudo:x:\([0-9]*\):.*/&,coder/;s/:,coder/:coder/' "${'$'}R/etc/group" 2>/dev/null || true
+                    fi
                 fi
 
-                usermod -aG aid_inet,aid_net_raw coder 2>/dev/null || true
-                id -u coder >/dev/null 2>&1
+                # 2. Primary 'coder' user in /etc/passwd (UID 1000, GID 1000)
+                [ -f "${'$'}R/etc/passwd" ] || touch "${'$'}R/etc/passwd"
+                if ! grep -q '^coder:' "${'$'}R/etc/passwd" 2>/dev/null; then
+                    echo 'coder:x:1000:1000:coder:/home/coder:/bin/bash' >> "${'$'}R/etc/passwd"
+                fi
+
+                # 3. Shadow record in /etc/shadow
+                if [ -f "${'$'}R/etc/shadow" ]; then
+                    if ! grep -q '^coder:' "${'$'}R/etc/shadow" 2>/dev/null; then
+                        echo 'coder:*:19800:0:99999:7:::' >> "${'$'}R/etc/shadow"
+                    fi
+                fi
+
+                # Verify coder is present in passwd
+                grep -q '^coder:' "${'$'}R/etc/passwd"
             """.trimIndent()
 
-            val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
+            val result = RootManager.runAsRoot(script, ROOT_TIMEOUT_MS)
             result.isSuccess
         } catch (_: Exception) {
             false
@@ -108,15 +133,20 @@ object SetupWizard {
     }
 
     /**
-     * Prepares the user's workspace directory and sets ownership.
+     * Prepares user workspace directory directly on the host filesystem
+     * and assigns ownership to numeric UID/GID 1000:1000.
      */
     suspend fun ensureWorkspace(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
-                mkdir -p /home/coder/projects
-                chown -R coder:coder /home/coder 2>/dev/null || chown -R 1000:1000 /home/coder 2>/dev/null || true
+                R="$root"
+                mkdir -p "${'$'}R/home/coder/projects"
+                mkdir -p "${'$'}R/home/coder/.npm-global"
+                chown -R 1000:1000 "${'$'}R/home/coder" 2>/dev/null || true
+                chmod 755 "${'$'}R/home/coder" "${'$'}R/home/coder/projects" 2>/dev/null || true
+                [ -d "${'$'}R/home/coder/projects" ]
             """.trimIndent()
-            val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
+            val result = RootManager.runAsRoot(script, ROOT_TIMEOUT_MS)
             result.isSuccess
         } catch (_: Exception) {
             false
@@ -124,25 +154,30 @@ object SetupWizard {
     }
 
     /**
-     * Idempotent shell configuration: npm user prefix, PATH, helpful aliases.
+     * Writes user shell environment directly to [root]/home/coder/.bashrc.
      */
     private suspend fun ensureShellConfig(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
-                mkdir -p /home/coder/.npm-global
-                chown coder:coder /home/coder/.npm-global
-                touch /home/coder/.bashrc
-                grep -q "DEVCODE_SHELL" /home/coder/.bashrc 2>/dev/null || cat >> /home/coder/.bashrc <<'EOF'
-                # DEVCODE_SHELL - managed by DEVCODE app
-                export NPM_CONFIG_PREFIX=/home/coder/.npm-global
-                export PATH=/home/coder/.npm-global/bin:${'$'}PATH
-                export HOME=/home/coder
-                export USER=coder
-                cd /home/coder/projects 2>/dev/null || true
-                EOF
-                chown coder:coder /home/coder/.bashrc
+                R="$root"
+                mkdir -p "${'$'}R/home/coder"
+                BASHRC="${'$'}R/home/coder/.bashrc"
+                touch "${'$'}BASHRC"
+                if ! grep -q "DEVCODE_SHELL" "${'$'}BASHRC" 2>/dev/null; then
+                    cat >> "${'$'}BASHRC" <<'EOF'
+# DEVCODE_SHELL - managed by DEVCODE app
+export NPM_CONFIG_PREFIX=/home/coder/.npm-global
+export PATH=/home/coder/.npm-global/bin:${'$'}PATH
+export HOME=/home/coder
+export USER=coder
+export TERM=xterm-256color
+cd /home/coder/projects 2>/dev/null || true
+EOF
+                fi
+                chown -R 1000:1000 "${'$'}R/home/coder" 2>/dev/null || true
+                chmod 644 "${'$'}BASHRC" 2>/dev/null || true
             """.trimIndent()
-            val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
+            val result = RootManager.runAsRoot(script, ROOT_TIMEOUT_MS)
             result.isSuccess
         } catch (_: Exception) {
             false
@@ -168,13 +203,11 @@ object SetupWizard {
                 }
                 try {
                     log("Running apt-get update...")
-                    val updateRes = RootManager.runAsRoot(
-                        chrootCmd(
-                            "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; " +
-                                "DEBIAN_FRONTEND=noninteractive apt-get update"
-                        ),
-                        APT_TIMEOUT_MS
+                    val updateCmd = chrootCmd(
+                        "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; " +
+                            "DEBIAN_FRONTEND=noninteractive apt-get update"
                     )
+                    val updateRes = RootManager.runAsRoot(updateCmd, APT_TIMEOUT_MS)
                     log("apt-get update exit=${updateRes.exitCode}")
                     if (!updateRes.isSuccess) {
                         log("Error updating package lists: ${updateRes.stderr.ifBlank { updateRes.stdout }}")
@@ -183,10 +216,10 @@ object SetupWizard {
 
                     val pkgList = packages.joinToString(" ")
                     log("Installing: $pkgList")
-                    val installRes = RootManager.runAsRoot(
-                        chrootCmd("DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $pkgList; rc=${'$'}?; rm -f /usr/sbin/policy-rc.d; exit ${'$'}rc"),
-                        APT_TIMEOUT_MS
+                    val installCmd = chrootCmd(
+                        "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $pkgList; rc=${'$'}?; rm -f /usr/sbin/policy-rc.d; exit ${'$'}rc"
                     )
+                    val installRes = RootManager.runAsRoot(installCmd, APT_TIMEOUT_MS)
                     log("apt-get install exit=${installRes.exitCode}")
                     if (!installRes.isSuccess) {
                         log("Error installing packages: ${installRes.stderr.ifBlank { installRes.stdout }}")
@@ -209,14 +242,13 @@ object SetupWizard {
 
     /**
      * Executes the bootstrap setup sequence + optional dev packages.
-     * Preserves trailing-lambda call style: runDevSetup { log -> }.
      */
     suspend fun runDevSetup(
         selected: List<String> = DEV_PACKAGES,
         log: (String) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            log("Bootstrapping Ubuntu user environment...")
+            log("Configuring Ubuntu user environment...")
             if (!bootstrap()) {
                 log("Error: bootstrap (DNS/user/workspace) failed")
                 return@withContext false
