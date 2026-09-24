@@ -95,5 +95,18 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 | 4 | **Smart Chroot Detection** | `ChrootManager.kt`: `getChrootExecutable()` auto-detect toybox, Magisk, KSU, APatch | Selesai |
 | 5 | **Modernisasi UI/UX 2026** | `Theme.kt`, `Nav.kt`, Screen: Edge-to-edge padding, tipografi modern, accessory keyboard bar terminal | Selesai |
 | 6 | **Build & Dynamic Versioning** | `build.gradle.kts`: Dynamic `versionCode`, signing config release konsisten | Selesai |
-| 7 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Sedang Dikerjakan |
-| 8 | **Delivery Link APK Baru** | Memberikan link unduhan langsung APK rilis ke user | Menunggu CI Selesai |
+| 7 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Selesai (Run #14 sukses) |
+| 8 | **Delivery Link APK Baru** | Memberikan link unduhan langsung APK rilis ke user | Selesai (Release build-14) |
+
+---
+
+## 5. Hasil Rilis APK Terbaru (Host-Side Provisioning)
+- **GitHub Release Tag**: `build-14`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-14`
+- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-14/app-debug.apk`
+- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
+- **Version**: VersionCode 14, VersionName `1.0.14`
+- **Changelog**:
+  - Full Host-Side Zero-Chroot Provisioning (DNS, passwd, group, shadow, bashrc, workspace).
+  - Smart multi-root binary chroot detector (toybox, Magisk, KernelSU, APatch).
+  - Eliminasi total error "Bootstrap failed: unable to configure user or DNS".
