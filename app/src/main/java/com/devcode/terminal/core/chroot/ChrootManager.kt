@@ -128,7 +128,7 @@ object ChrootManager {
                 # 3. Sysfs
                 grep -q " ${'$'}R/sys " /proc/mounts || mount -t sysfs sysfs "${'$'}R/sys"
 
-                # 4. Dedicated isolated tmpfs on $R/dev (NEVER bind mount global host /dev!)
+                # 4. Dedicated isolated tmpfs on target dev (NEVER bind mount global host /dev!)
                 if ! grep -q " ${'$'}R/dev " /proc/mounts; then
                     mount -t tmpfs -o mode=755,nosuid dev "${'$'}R/dev"
                     mkdir -p "${'$'}R/dev/pts" "${'$'}R/dev/shm"
@@ -207,7 +207,7 @@ object ChrootManager {
                     umount -l "${'$'}R/sdcard" 2>/dev/null || true
                 fi
 
-                # 2. Unmount individual device nodes in $R/dev
+                # 2. Unmount individual device nodes in target dev
                 for node in null zero full random urandom tty; do
                     if grep -q " ${'$'}R/dev/${'$'}node " /proc/mounts 2>/dev/null; then
                         umount -l "${'$'}R/dev/${'$'}node" 2>/dev/null || true
