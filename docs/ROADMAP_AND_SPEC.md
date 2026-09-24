@@ -67,5 +67,14 @@ User memiliki chroot lain yang sudah aktif di ponsel. DEVCODE **TIDAK BOLEH BENT
 | 3 | **Perbaikan Instalasi Chroot** | `UbuntuManager.kt` & `SetupWizard.kt`: Mount virtual fs sebelum bootstrap user, perbaikan whitelist base, logging jelas | Selesai |
 | 4 | **Modernisasi UI/UX 2026** | `Theme.kt`, `Nav.kt`, Screen (Dashboard, Ubuntu, Terminal, Settings): Edge-to-edge padding, tipografi Sans-serif + Monospace code, tombol keyboard terminal mobile, layout aman | Selesai |
 | 5 | **Build & Dynamic Versioning** | `build.gradle.kts`: Dynamic `versionCode`, signing config release konsisten | Selesai |
-| 6 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Sedang Dikerjakan |
-| 7 | **Delivery Link APK** | Memberikan link unduhan langsung APK rilis ke user | Menunggu CI Selesai |
+| 6 | **Git Push & CI Monitoring** | Commit, push ke `origin main`, pantau GitHub Actions hingga APK ter-compile | Selesai (Run #12 sukses) |
+| 7 | **Delivery Link APK** | Memberikan link unduhan langsung APK rilis ke user | Selesai (Release build-12) |
+
+---
+
+## 4. Hasil Rilis APK Terbaru
+- **GitHub Release Tag**: `build-12`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-12`
+- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-12/app-debug.apk`
+- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
+- **Version**: VersionCode 12, VersionName `1.0.12`
