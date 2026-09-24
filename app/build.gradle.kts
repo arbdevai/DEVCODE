@@ -7,12 +7,15 @@ android {
     namespace = "com.devcode.terminal"
     compileSdk = 34
 
+    val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 2
+    val ciVersionName = "1.0.$ciRunNumber"
+
     defaultConfig {
         applicationId = "com.devcode.terminal"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = ciRunNumber
+        versionName = ciVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

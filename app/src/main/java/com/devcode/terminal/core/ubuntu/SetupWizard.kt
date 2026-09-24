@@ -42,13 +42,13 @@ object SetupWizard {
 
     private fun chrootCmd(script: String, root: String = UbuntuManager.INSTALL_DIR): String {
         val escaped = script.replace("'", "'\\''")
-        return "chroot $root /bin/bash -c '$escaped'"
+        return "if [ -x '$root/bin/bash' ] || [ -x '$root/usr/bin/bash' ]; then chroot '$root' /bin/bash -c '$escaped'; else chroot '$root' /bin/sh -c '$escaped'; fi"
     }
 
     /**
      * Mandatory bootstrap: DNS + user + workspace + shell config.
      * @param root chroot path (live INSTALL_DIR for repair, temp dir during install).
-     * Runs without mounting (assumes caller holds environment lock).
+     * Assumes virtual filesystems (/dev, /proc) are mounted if available.
      */
     suspend fun bootstrap(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -69,8 +69,8 @@ object SetupWizard {
     suspend fun ensureDns(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
-                if [ -L /etc/resolv.conf ]; then rm -f /etc/resolv.conf; fi
                 mkdir -p /etc
+                if [ -L /etc/resolv.conf ]; then rm -f /etc/resolv.conf; fi
                 printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf
             """.trimIndent()
             val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
@@ -90,12 +90,14 @@ object SetupWizard {
                 groupadd -g 3003 aid_inet 2>/dev/null || true
                 groupadd -g 3004 aid_net_raw 2>/dev/null || true
 
-                if ! id coder >/dev/null 2>&1; then
-                    useradd -m -s /bin/bash coder 2>/dev/null || useradd -m coder
+                if ! id -u coder >/dev/null 2>&1; then
+                    useradd -m -s /bin/bash -u 1000 coder 2>/dev/null || \
+                    useradd -m -s /bin/bash coder 2>/dev/null || \
+                    useradd -m coder 2>/dev/null || true
                 fi
 
                 usermod -aG aid_inet,aid_net_raw coder 2>/dev/null || true
-                # coder stays OUT of sudo group by default; app performs root ops
+                id -u coder >/dev/null 2>&1
             """.trimIndent()
 
             val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
@@ -112,7 +114,7 @@ object SetupWizard {
         try {
             val script = """
                 mkdir -p /home/coder/projects
-                chown coder:coder /home/coder /home/coder/projects
+                chown -R coder:coder /home/coder 2>/dev/null || chown -R 1000:1000 /home/coder 2>/dev/null || true
             """.trimIndent()
             val result = RootManager.runAsRoot(chrootCmd(script, root), ROOT_TIMEOUT_MS)
             result.isSuccess

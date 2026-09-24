@@ -107,7 +107,7 @@ object UbuntuManager {
     }
 
     private fun rootfsExists(): Boolean {
-        val (code, _) = su("test -x $INSTALL_DIR/bin/bash")
+        val (code, _) = su("test -x $INSTALL_DIR/bin/bash || test -x $INSTALL_DIR/usr/bin/bash")
         return code == 0
     }
 
@@ -127,8 +127,8 @@ object UbuntuManager {
      * - Exact marker ownership is preferred (strict owner check).
      * - If marker is missing or has a different owner (e.g., after APK reinstall or keystore update),
      *   we attempt safe reclaim:
-     *   1. If a valid, functional Ubuntu rootfs exists (executable /bin/bash inside), we reclaim
-     *      ownership by updating the marker without touching user data.
+     *   1. If a valid, functional Ubuntu rootfs exists (executable /bin/bash or /usr/bin/bash inside),
+     *      we reclaim ownership by updating the marker without touching user data.
      *   2. If no valid rootfs exists, we allow claiming an empty base or an interrupted DEVCODE
      *      skeleton (staging, cache, ubuntu.install, etc.).
      *   3. Any foreign/unknown files outside DEVCODE's structure fail closed.
@@ -158,7 +158,7 @@ object UbuntuManager {
             fi
 
             # 2. Safe reclaim: if a valid rootfs is present (reinstall over existing data)
-            if [ -x "${'$'}ROOTFS/bin/bash" ]; then
+            if [ -x "${'$'}ROOTFS/bin/bash" ] || [ -x "${'$'}ROOTFS/usr/bin/bash" ]; then
                 tmp="${'$'}MARKER.tmp.${'$'}${'$'}"
                 printf '%s\n' "${'$'}OWNER" > "${'$'}tmp"
                 chmod 600 "${'$'}tmp"
@@ -171,22 +171,23 @@ object UbuntuManager {
                 rm -rf "${'$'}TMP_INSTALL" 2>/dev/null || true
             fi
 
-            # 4. Check for foreign files (allow only DEVCODE staging tarballs and marker)
-            for f in ${'$'}(find "${'$'}BASE" -mindepth 1 -maxdepth 3 \( -type f -o -type l \) -print 2>/dev/null || true); do
+            # 4. Check top-level files (allow only DEVCODE staging tarballs, marker, cache)
+            for f in ${'$'}(find "${'$'}BASE" -mindepth 1 -maxdepth 2 \( -type f -o -type l \) -print 2>/dev/null || true); do
                 rel=${'$'}{f#"${'$'}BASE"/}
                 case "${'$'}rel" in
-                    .devcode-owner*|staging/ubuntu-base.tar.gz*|cache/*) ;;
+                    .devcode-owner*|staging/*|cache/*|staging|cache) ;;
+                    ubuntu/*|ubuntu.install/*) ;;
                     *) echo "unmarked base contains foreign file: ${'$'}rel"; exit 3 ;;
                 esac
             done
 
-            # 5. Check for foreign directories
-            allowed="ubuntu ubuntu/proc ubuntu/sys ubuntu/dev ubuntu/dev/pts ubuntu/etc ubuntu/run ubuntu/run/devcode ubuntu/run/devcode/sessions ubuntu/sdcard staging cache"
-            for d in ${'$'}(find "${'$'}BASE" -mindepth 1 -type d -print 2>/dev/null || true); do
+            # 5. Check top-level directories (allow only DEVCODE structure)
+            for d in ${'$'}(find "${'$'}BASE" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null || true); do
                 rel=${'$'}{d#"${'$'}BASE"/}
-                ok=no
-                for a in ${'$'}allowed; do [ "${'$'}rel" = "${'$'}a" ] && ok=yes; done
-                [ "${'$'}ok" = yes ] || { echo "unmarked base has unknown directory: ${'$'}rel"; exit 3; }
+                case "${'$'}rel" in
+                    ubuntu|ubuntu.install|staging|cache) ;;
+                    *) echo "unmarked base has unknown directory: ${'$'}rel"; exit 3 ;;
+                esac
             done
 
             # 6. Write ownership marker
@@ -522,7 +523,7 @@ object UbuntuManager {
      */
     suspend fun extract(): Boolean = withContext(Dispatchers.IO) {
         try {
-            _state.update { it.copy(status = InstallStatus.EXTRACTING, busy = true, message = "Extracting rootfs...") }
+            _state.update { it.copy(status = InstallStatus.EXTRACTING, busy = true, message = "Extracting rootfs archive...") }
 
             val src = privateTarball()
             if (!src.exists() || src.length() == 0L) {
@@ -537,38 +538,70 @@ object UbuntuManager {
                 300_000L
             )
             if (cpCode != 0) {
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Staging copy failed") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Staging copy failed: $cpOut") }
                 return@withContext false
             }
 
             val tmpDir = "${INSTALL_DIR}.install"
-            val (rmCode, _) = su("rm -rf $tmpDir && mkdir -p $tmpDir", 120_000L)
+            ChrootManager.unmountTargetLocked(tmpDir, force = true)
+            val (rmCode, rmOut) = su("rm -rf $tmpDir && mkdir -p $tmpDir", 120_000L)
             if (rmCode != 0) {
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Cannot prepare install dir") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Cannot prepare install dir: $rmOut") }
                 return@withContext false
             }
 
-            val (exCode, _) = su("tar -xzf $TARBALL -C $tmpDir", 1_800_000L)
+            _state.update { it.copy(message = "Unpacking Ubuntu 24.04 filesystem...") }
+
+            var (exCode, exOut) = su("tar -xzf $TARBALL -C $tmpDir", 1_800_000L)
             if (exCode != 0) {
+                // Fallback: pipe through gzip for toybox compatibility
+                val fb = su("gzip -dc $TARBALL | tar -xf - -C $tmpDir", 1_800_000L)
+                exCode = fb.first
+                exOut = fb.second
+            }
+            if (exCode != 0) {
+                ChrootManager.unmountTargetLocked(tmpDir, force = true)
                 su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Extraction failed") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Extraction failed: ${exOut.ifBlank { "code $exCode" }}") }
                 return@withContext false
             }
 
-            val (valCode, _) = su("test -x $tmpDir/bin/bash")
+            val (valCode, _) = su("test -x $tmpDir/bin/bash || test -x $tmpDir/usr/bin/bash")
             if (valCode != 0) {
+                ChrootManager.unmountTargetLocked(tmpDir, force = true)
                 su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Invalid rootfs: /bin/bash missing") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Invalid rootfs: bash binary missing") }
+                return@withContext false
+            }
+
+            _state.update { it.copy(message = "Configuring isolated environment & user...") }
+
+            // Mount isolated virtual filesystems in tmpDir so useradd & DNS work reliably
+            val mountOk = ChrootManager.mountTargetLocked(tmpDir)
+            if (!mountOk) {
+                ChrootManager.unmountTargetLocked(tmpDir, force = true)
+                su("rm -rf $tmpDir")
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Failed to mount chroot virtual filesystems for setup") }
                 return@withContext false
             }
 
             // Mandatory bootstrap: coder user, DNS, workspace, shell config
-            if (!SetupWizard.bootstrap(tmpDir)) {
+            val bootOk = try {
+                SetupWizard.bootstrap(tmpDir)
+            } catch (_: Exception) {
+                false
+            } finally {
+                ChrootManager.unmountTargetLocked(tmpDir, force = true)
+            }
+
+            if (!bootOk) {
                 su("rm -rf $tmpDir")
-                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Bootstrap failed") }
+                _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Bootstrap failed: unable to configure user or DNS") }
                 return@withContext false
             }
 
+            _state.update { it.copy(message = "Activating Ubuntu rootfs...") }
+            ChrootManager.unmountTargetLocked(INSTALL_DIR, force = true)
             val (mvCode, mvOut) = su("rm -rf $INSTALL_DIR && mv $tmpDir $INSTALL_DIR", 120_000L)
             if (mvCode != 0) {
                 su("rm -rf $tmpDir")
@@ -576,7 +609,10 @@ object UbuntuManager {
                 return@withContext false
             }
 
-            _state.update { it.copy(busy = false, message = "Extraction complete") }
+            // Clean staging tarball
+            su("rm -f $TARBALL")
+
+            _state.update { it.copy(busy = false, message = "Extraction and setup complete") }
             true
         } catch (e: Exception) {
             _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Extract error: ${e.message}") }
@@ -646,9 +682,11 @@ object UbuntuManager {
     suspend fun remove(): Boolean = withContext(Dispatchers.IO) {
         return@withContext ChrootManager.withEnvironmentLock {
             try {
-                _state.update { it.copy(busy = true) }
+                _state.update { it.copy(busy = true, message = "Removing Ubuntu rootfs...") }
                 requireIdle()
                 ensureOwnedBase()
+                ChrootManager.unmountTargetLocked(INSTALL_DIR, force = true)
+                ChrootManager.unmountTargetLocked("${INSTALL_DIR}.install", force = true)
 
                 val (code, _) = su(
                     "if [ -L $INSTALL_DIR ]; then echo SYMLINK; exit 3; fi; " +
@@ -681,6 +719,8 @@ object UbuntuManager {
             try {
                 _state.update { it.copy(busy = true, message = "Force cleaning corrupted rootfs...") }
                 requireIdle()
+                ChrootManager.unmountTargetLocked(INSTALL_DIR, force = true)
+                ChrootManager.unmountTargetLocked("${INSTALL_DIR}.install", force = true)
 
                 val (code, _) = su(
                     "rm -rf $INSTALL_DIR ${INSTALL_DIR}.install $TARBALL $STAGING_DIR $CACHE_DIR",

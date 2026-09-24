@@ -70,11 +70,11 @@ object ChrootManager {
     }
 
     /**
-     * Checks if essential chroot filesystems (/proc) are currently mounted.
+     * Checks if essential chroot filesystems (/proc) are currently mounted for target root.
      */
-    suspend fun isMounted(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun isMounted(root: String = UBUNTU_ROOT): Boolean = withContext(Dispatchers.IO) {
         try {
-            val result = RootManager.runAsRoot("grep -q \" $UBUNTU_ROOT/proc \" /proc/mounts")
+            val result = RootManager.runAsRoot("grep -q \" $root/proc \" /proc/mounts")
             result.isSuccess
         } catch (_: Throwable) {
             false
@@ -103,13 +103,20 @@ object ChrootManager {
     // ---- Mount lifecycle --------------------------------------------------
 
     /**
-     * Internal unlocked mount implementation. Caller must hold [lifecycleMutex]
-     * or ensure lock is acquired.
+     * Mounts chroot virtual filesystems for a specific target root (e.g. main UBUNTU_ROOT
+     * or a temporary extraction directory).
+     *
+     * Isolation invariants:
+     * - Mount point is isolated via `--make-rprivate` so it does not propagate to other chroots on the device.
+     * - `/dev` uses `--make-rslave` to avoid publishing devices to the host or other chroots.
+     * - `/dev/pts` uses a dedicated `newinstance` mount to isolate DEVCODE pseudo-terminals.
      */
-    internal suspend fun mountLocked(): Boolean = withContext(Dispatchers.IO) {
+    internal suspend fun mountTargetLocked(targetRoot: String = UBUNTU_ROOT): Boolean = withContext(Dispatchers.IO) {
         try {
             val mountScript = """
-                R="$UBUNTU_ROOT"
+                R="$targetRoot"
+                # Isolate mount hierarchy so other chroots on the device are never affected
+                mount --make-rprivate "${'$'}R" 2>/dev/null || true
                 mkdir -p "${'$'}R/proc" "${'$'}R/sys" "${'$'}R/dev" "${'$'}R/dev/pts" "${'$'}R/etc" "${'$'}R$SESSION_RUN_DIR"
 
                 # 1. Procfs
@@ -118,64 +125,92 @@ object ChrootManager {
                 # 2. Sysfs
                 grep -q " ${'$'}R/sys " /proc/mounts || mount -t sysfs sysfs "${'$'}R/sys"
 
-                # 3. Dev bind mount (slave to avoid propagating chroot dev nodes to host)
+                # 3. Dev bind mount with recursive slave
                 if ! grep -q " ${'$'}R/dev " /proc/mounts; then
                     mount --bind /dev "${'$'}R/dev"
-                    mount --make-slave "${'$'}R/dev" 2>/dev/null || true
+                    mount --make-rslave "${'$'}R/dev" 2>/dev/null || mount --make-slave "${'$'}R/dev" 2>/dev/null || true
                 fi
 
-                # 4. Devpts: mount dedicated instance with newinstance to protect Android global pts
+                # 4. Devpts: isolated dedicated instance
                 if ! grep -q " ${'$'}R/dev/pts " /proc/mounts; then
-                    mount -t devpts -o newinstance,ptmxmode=0666 devpts "${'$'}R/dev/pts" 2>/dev/null \
+                    mount -t devpts -o newinstance,ptmxmode=0666,mode=620 devpts "${'$'}R/dev/pts" 2>/dev/null \
                         || mount -t devpts devpts "${'$'}R/dev/pts" 2>/dev/null \
                         || mount --bind /dev/pts "${'$'}R/dev/pts" 2>/dev/null \
                         || true
                 fi
 
-                # 5. Shared storage (/sdcard)
-                if [ -d /sdcard ]; then
-                    mkdir -p "${'$'}R/sdcard"
-                    grep -q " ${'$'}R/sdcard " /proc/mounts || mount --bind /sdcard "${'$'}R/sdcard" 2>/dev/null || true
-                elif [ -d /storage/emulated/0 ]; then
-                    mkdir -p "${'$'}R/sdcard"
-                    grep -q " ${'$'}R/sdcard " /proc/mounts || mount --bind /storage/emulated/0 "${'$'}R/sdcard" 2>/dev/null || true
+                # Essential standard device nodes inside chroot
+                [ -e "${'$'}R/dev/null" ] || mknod -m 666 "${'$'}R/dev/null" c 1 3 2>/dev/null || true
+                [ -e "${'$'}R/dev/zero" ] || mknod -m 666 "${'$'}R/dev/zero" c 1 5 2>/dev/null || true
+                [ -e "${'$'}R/dev/random" ] || mknod -m 666 "${'$'}R/dev/random" c 1 8 2>/dev/null || true
+                [ -e "${'$'}R/dev/urandom" ] || mknod -m 666 "${'$'}R/dev/urandom" c 1 9 2>/dev/null || true
+
+                # 5. Shared storage (/sdcard) - only mount for the primary installation
+                if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
+                    if [ -d /sdcard ]; then
+                        mkdir -p "${'$'}R/sdcard"
+                        grep -q " ${'$'}R/sdcard " /proc/mounts || mount --bind /sdcard "${'$'}R/sdcard" 2>/dev/null || true
+                        mount --make-slave "${'$'}R/sdcard" 2>/dev/null || true
+                    elif [ -d /storage/emulated/0 ]; then
+                        mkdir -p "${'$'}R/sdcard"
+                        grep -q " ${'$'}R/sdcard " /proc/mounts || mount --bind /storage/emulated/0 "${'$'}R/sdcard" 2>/dev/null || true
+                        mount --make-slave "${'$'}R/sdcard" 2>/dev/null || true
+                    fi
                 fi
 
                 # 6. DNS resolver
+                mkdir -p "${'$'}R/etc"
+                if [ -L "${'$'}R/etc/resolv.conf" ]; then rm -f "${'$'}R/etc/resolv.conf"; fi
                 printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}R/etc/resolv.conf"
             """.trimIndent()
 
             val result = RootManager.runAsRoot(mountScript)
-            result.isSuccess || isMounted()
+            result.isSuccess || isMounted(targetRoot)
         } catch (_: Throwable) {
             false
         }
     }
 
     /**
-     * Internal unlocked unmount implementation.
+     * Unmounts all virtual filesystems specifically under [targetRoot].
+     * Never touches or affects any other chroot or system mount points.
      */
-    internal suspend fun unmountLocked(force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+    internal suspend fun unmountTargetLocked(targetRoot: String = UBUNTU_ROOT, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (!force && hasActiveSessions()) {
+            if (!force && targetRoot == UBUNTU_ROOT && hasActiveSessions()) {
                 return@withContext false
             }
 
             val unmountScript = """
-                R="$UBUNTU_ROOT"
-                umount -l "${'$'}R/sdcard" 2>/dev/null || true
-                umount -l "${'$'}R/dev/pts" 2>/dev/null || true
-                umount -l "${'$'}R/dev" 2>/dev/null || true
-                umount -l "${'$'}R/sys" 2>/dev/null || true
-                umount -l "${'$'}R/proc" 2>/dev/null || true
+                R="$targetRoot"
+                # Explicit reverse unmount of known DEVCODE mount points
+                for m in "${'$'}R/sdcard" "${'$'}R/dev/pts" "${'$'}R/dev" "${'$'}R/sys" "${'$'}R/proc"; do
+                    if grep -q " ${'$'}m " /proc/mounts 2>/dev/null; then
+                        umount -l "${'$'}m" 2>/dev/null || umount "${'$'}m" 2>/dev/null || true
+                    fi
+                done
+                # Catch any residual submounts strictly under target root
+                awk -v r="${'$'}R/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null | sort -r | while read -r p; do
+                    [ -n "${'$'}p" ] && umount -l "${'$'}p" 2>/dev/null || true
+                done
             """.trimIndent()
 
             RootManager.runAsRoot(unmountScript)
-            !isMounted()
+            !isMounted(targetRoot)
         } catch (_: Throwable) {
             false
         }
     }
+
+    /**
+     * Internal unlocked mount implementation for UBUNTU_ROOT. Caller must hold [lifecycleMutex].
+     */
+    internal suspend fun mountLocked(): Boolean = mountTargetLocked(UBUNTU_ROOT)
+
+    /**
+     * Internal unlocked unmount implementation for UBUNTU_ROOT.
+     */
+    internal suspend fun unmountLocked(force: Boolean = false): Boolean = unmountTargetLocked(UBUNTU_ROOT, force)
 
     /**
      * Mounts proc, sysfs, dev, devpts, shared storage, and writes DNS configuration.

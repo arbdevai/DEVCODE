@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -27,6 +30,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +48,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,9 +72,12 @@ fun UbuntuScreen(
         UbuntuManager.refreshStatus()
     }
 
-    val statusName = ubuntuState.status.name
     val isInstalled = ubuntuState.status == UbuntuManager.InstallStatus.INSTALLED
-    val isDownloading = ubuntuState.downloadProgress in 0.001f..0.999f
+    val isBusy = ubuntuState.busy
+    val isDownloading = ubuntuState.status == UbuntuManager.InstallStatus.DOWNLOADING
+    val isVerifying = ubuntuState.status == UbuntuManager.InstallStatus.VERIFYING
+    val isExtracting = ubuntuState.status == UbuntuManager.InstallStatus.EXTRACTING
+    val isCorrupt = ubuntuState.status == UbuntuManager.InstallStatus.CORRUPT
 
     // Confirmation dialog before remove action
     if (showRemoveDialog) {
@@ -80,20 +88,21 @@ fun UbuntuScreen(
                     imageVector = Icons.Default.Warning,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
                 )
             },
             title = {
                 Text(
-                    text = "REMOVE UBUNTU ROOTFS",
+                    text = "Remove Ubuntu Rootfs?",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
                 )
             },
             text = {
                 Text(
-                    text = "Are you sure you want to completely remove the Ubuntu rootfs at /data/local/devcode/ubuntu? This will delete all installed packages, configurations, and rootfs data.",
+                    text = "This will remove the entire Ubuntu 24.04 filesystem at /data/local/devcode/ubuntu, including all installed apt packages and configs. User files inside /home/coder/projects will be wiped.",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             confirmButton = {
@@ -109,18 +118,18 @@ fun UbuntuScreen(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
                     ),
-                    shape = RoundedCornerShape(4.dp),
+                    shape = RoundedCornerShape(8.dp),
                 ) {
-                    Text("CONFIRM REMOVE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text("Delete Rootfs", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showRemoveDialog = false }) {
-                    Text("CANCEL", style = MaterialTheme.typography.labelSmall)
+                    Text("Cancel", style = MaterialTheme.typography.labelMedium)
                 }
             },
             containerColor = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(16.dp),
         )
     }
 
@@ -128,92 +137,138 @@ fun UbuntuScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+            // Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Ubuntu Manager",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = "24.04.5 LTS ARM64 Isolated Chroot",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
-                        .background(Color(0xFF7DD3FC), RoundedCornerShape(2.dp)),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "UBUNTU // ROOTFS CONTROL",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp,
+                        .background(
+                            color = if (isInstalled) Color(0xFF10B981).copy(alpha = 0.12f)
+                            else if (isBusy) Color(0xFF0EA5E9).copy(alpha = 0.12f)
+                            else if (isCorrupt) Color(0xFFF43F5E).copy(alpha = 0.12f)
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = if (isInstalled) "INSTALLED"
+                        else if (isBusy) ubuntuState.status.name
+                        else if (isCorrupt) "CORRUPTED"
+                        else "AVAILABLE",
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                    ),
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                        color = if (isInstalled) Color(0xFF10B981)
+                        else if (isBusy) Color(0xFF0EA5E9)
+                        else if (isCorrupt) Color(0xFFF43F5E)
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
-        // --- Status card ---
+        // --- Status overview card ---
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "ENVIRONMENT STATUS",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "LIFECYCLE STATUS",
+                        style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    StatusRow(label = "State", ok = isInstalled, detail = statusName)
+                    StatusRow(
+                        label = "State",
+                        ok = isInstalled,
+                        detail = ubuntuState.status.name,
+                    )
 
                     val usedMb = ubuntuState.storageUsedBytes / (1024L * 1024L)
                     val availMb = ubuntuState.storageAvailBytes / (1024L * 1024L)
-                    StatusRow(label = "Used", ok = true, detail = "$usedMb MB")
-                    StatusRow(label = "Available", ok = availMb > 500, detail = "$availMb MB")
+                    StatusRow(label = "Chroot Size", ok = true, detail = "$usedMb MB", isMonospaceDetail = true)
+                    StatusRow(label = "Available Disk", ok = availMb > 500, detail = "$availMb MB", isMonospaceDetail = true)
 
-                    // Download progress bar
-                    if (isDownloading) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "DOWNLOADING: ${(ubuntuState.downloadProgress * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        LinearProgressIndicator(
-                            progress = { ubuntuState.downloadProgress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                        )
+                    // Download / Processing progress bar
+                    if (isBusy) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = when {
+                                    isDownloading -> "Downloading rootfs: ${(ubuntuState.downloadProgress * 100).toInt()}%"
+                                    isVerifying   -> "Verifying SHA-256 checksum..."
+                                    isExtracting  -> "Extracting and bootstrapping..."
+                                    else          -> "Processing..."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+
+                        if (isDownloading) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { ubuntuState.downloadProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                        }
                     }
 
-                    // Message log line
+                    // Message log banner
                     if (ubuntuState.message.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF0B0F14), RoundedCornerShape(4.dp))
-                                .padding(8.dp),
+                                .background(
+                                    if (isCorrupt) Color(0xFFF43F5E).copy(alpha = 0.1f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(10.dp),
                         ) {
                             Text(
                                 text = ubuntuState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                color = if (isCorrupt) Color(0xFFF43F5E) else MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
@@ -221,90 +276,153 @@ fun UbuntuScreen(
             }
         }
 
-        // --- Install / Repair / Remove ---
+        // --- Action Buttons ---
         item {
-            Row(
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            UbuntuManager.install()
-                            UbuntuManager.refreshStatus()
-                        }
-                    },
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("INSTALL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                }
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "OPERATIONS",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            UbuntuManager.repair()
-                            UbuntuManager.refreshStatus()
+                    if (!isInstalled) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    UbuntuManager.install()
+                                    UbuntuManager.refreshStatus()
+                                }
+                            },
+                            enabled = !isBusy,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isBusy) "Installing..." else "Install Ubuntu 24.04 ARM64",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
                         }
-                    },
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("REPAIR", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                }
 
-                OutlinedButton(
-                    onClick = {
-                        showRemoveDialog = true
-                    },
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("REMOVE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        if (isCorrupt) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        UbuntuManager.forceRemove()
+                                        UbuntuManager.refreshStatus()
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Force Clean Corrupted Files", style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        UbuntuManager.repair()
+                                        UbuntuManager.refreshStatus()
+                                    }
+                                },
+                                enabled = !isBusy,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Repair Config", style = MaterialTheme.typography.labelMedium)
+                            }
+
+                            OutlinedButton(
+                                onClick = { showRemoveDialog = true },
+                                enabled = !isBusy,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Remove", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // --- Dev tools setup ---
+        // --- Dev tools setup section ---
         item {
-            Button(
-                onClick = {
-                    scope.launch {
-                        wizardLogs.clear()
-                        wizardLogs.add(">> Launching dev setup wizard...")
-                        val ok = SetupWizard.runDevSetup { line ->
-                            wizardLogs.add(line)
-                        }
-                        wizardLogs.add(
-                            if (ok) ">> Dev setup completed successfully."
-                            else ">> Dev setup encountered an error."
-                        )
-                        UbuntuManager.refreshStatus()
-                    }
-                },
-                shape = RoundedCornerShape(4.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                ),
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("SETUP DEV TOOLS", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "DEVELOPMENT TOOLCHAIN",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Installs essential packages: git, curl, python3, pip, nodejs, npm, build-essential, vim, and nano.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                wizardLogs.clear()
+                                wizardLogs.add(">> Launching dev setup wizard...")
+                                val ok = SetupWizard.runDevSetup { line ->
+                                    wizardLogs.add(line)
+                                }
+                                wizardLogs.add(
+                                    if (ok) ">> Dev setup completed successfully."
+                                    else ">> Dev setup encountered an error."
+                                )
+                                UbuntuManager.refreshStatus()
+                            }
+                        },
+                        enabled = isInstalled && !isBusy,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary,
+                            contentColor = MaterialTheme.colorScheme.onSecondary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (!isInstalled) "Install Ubuntu First" else "Provision Dev Packages",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
             }
         }
 
@@ -312,58 +430,51 @@ fun UbuntuScreen(
         if (wizardLogs.isNotEmpty()) {
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF080C10)),
-                    shape = RoundedCornerShape(6.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF090D12)),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = "WIZARD LOG",
-                                style = MaterialTheme.typography.labelSmall,
+                                text = "Setup Output Log",
+                                style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f),
                             )
-                            OutlinedButton(
+                            TextButton(
                                 onClick = { wizardLogs.clear() },
-                                shape = RoundedCornerShape(2.dp),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.height(24.dp),
                             ) {
-                                Text("CLEAR", style = MaterialTheme.typography.labelSmall)
+                                Text("Clear", style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                    }
-                }
-            }
 
-            items(wizardLogs.toList()) { line ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF080C10))
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                        color = when {
-                            line.startsWith(">>") -> MaterialTheme.colorScheme.primary
-                            line.contains("error", ignoreCase = true) ||
-                                    line.contains("failed", ignoreCase = true) -> Color(0xFFFB7185)
-                            line.contains("success", ignoreCase = true) ||
-                                    line.contains("done", ignoreCase = true) ||
-                                    line.contains("ready", ignoreCase = true) -> Color(0xFF4ADE80)
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        wizardLogs.forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = when {
+                                    line.startsWith(">>") -> MaterialTheme.colorScheme.primary
+                                    line.contains("error", ignoreCase = true) ||
+                                            line.contains("failed", ignoreCase = true) -> Color(0xFFF43F5E)
+                                    line.contains("success", ignoreCase = true) ||
+                                            line.contains("complete", ignoreCase = true) ||
+                                            line.contains("ready", ignoreCase = true) -> Color(0xFF10B981)
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.padding(vertical = 1.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
