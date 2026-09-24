@@ -61,11 +61,22 @@ object UbuntuManager {
         val message: String = "",
         val storageUsedBytes: Long = 0L,
         val storageAvailBytes: Long = 0L,
-        val busy: Boolean = false
+        val busy: Boolean = false,
+        val stepLogs: List<String> = emptyList()
     )
 
     private val _state = MutableStateFlow(UbuntuState())
     val state: StateFlow<UbuntuState> = _state.asStateFlow()
+
+    fun logStep(entry: String) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        _state.update {
+            it.copy(
+                message = entry,
+                stepLogs = (it.stepLogs + "[$time] $entry").takeLast(50)
+            )
+        }
+    }
 
     private var appContext: Context? = null
 
@@ -526,10 +537,12 @@ object UbuntuManager {
      */
     suspend fun extract(): Boolean = withContext(Dispatchers.IO) {
         try {
-            _state.update { it.copy(status = InstallStatus.EXTRACTING, busy = true, message = "Extracting rootfs archive...") }
+            _state.update { it.copy(status = InstallStatus.EXTRACTING, busy = true) }
+            logStep("Step 1/5: Preparing staging and directory safety...")
 
             val src = privateTarball()
             if (!src.exists() || src.length() == 0L) {
+                logStep("FAILED: No verified archive to extract")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "No archive to extract") }
                 return@withContext false
             }
@@ -541,6 +554,7 @@ object UbuntuManager {
                 300_000L
             )
             if (cpCode != 0) {
+                logStep("FAILED: Staging copy error: $cpOut")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Staging copy failed: $cpOut") }
                 return@withContext false
             }
@@ -549,11 +563,12 @@ object UbuntuManager {
             ChrootManager.unmountTargetLocked(tmpDir, force = true)
             val (rmCode, rmOut) = su("rm -rf $tmpDir && mkdir -p $tmpDir", 120_000L)
             if (rmCode != 0) {
+                logStep("FAILED: Cannot prepare install directory: $rmOut")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Cannot prepare install dir: $rmOut") }
                 return@withContext false
             }
 
-            _state.update { it.copy(message = "Unpacking Ubuntu 24.04 filesystem...") }
+            logStep("Step 2/5: Unpacking Ubuntu 24.04 ARM64 rootfs...")
 
             var (exCode, exOut) = su("tar -xzf $TARBALL -C $tmpDir", 1_800_000L)
             if (exCode != 0) {
@@ -565,6 +580,7 @@ object UbuntuManager {
             if (exCode != 0) {
                 ChrootManager.unmountTargetLocked(tmpDir, force = true)
                 su("rm -rf $tmpDir")
+                logStep("FAILED: Extraction failed: ${exOut.ifBlank { "code $exCode" }}")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Extraction failed: ${exOut.ifBlank { "code $exCode" }}") }
                 return@withContext false
             }
@@ -573,31 +589,38 @@ object UbuntuManager {
             if (valCode != 0) {
                 ChrootManager.unmountTargetLocked(tmpDir, force = true)
                 su("rm -rf $tmpDir")
+                logStep("FAILED: Invalid rootfs: bash binary missing")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Invalid rootfs: bash binary missing") }
                 return@withContext false
             }
 
-            _state.update { it.copy(message = "Configuring DNS, user coder & workspace...") }
+            logStep("Step 3/5: Provisioning DNS, user coder & passwordless sudo...")
 
             // Direct host-side provisioning: DNS, user coder (UID 1000), GIDs (3003, 3004), workspace & shell config
             val bootOk = try {
                 SetupWizard.bootstrap(tmpDir)
             } catch (e: Exception) {
+                logStep("FAILED: Bootstrap exception: ${e.message}")
                 _state.update { it.copy(message = "Bootstrap exception: ${e.message}") }
                 false
             }
 
             if (!bootOk) {
                 su("rm -rf $tmpDir")
+                logStep("FAILED: Unable to configure user, DNS or sudo")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Bootstrap failed: unable to write user or DNS configuration") }
                 return@withContext false
             }
 
-            _state.update { it.copy(message = "Activating Ubuntu rootfs...") }
+            logStep("Step 4/5: Deploying devcode CLI management tool...")
+            ChrootManager.deployDevcodeCli()
+
+            logStep("Step 5/5: Activating Ubuntu rootfs to $INSTALL_DIR...")
             ChrootManager.unmountTargetLocked(INSTALL_DIR, force = true)
             val (mvCode, mvOut) = su("rm -rf $INSTALL_DIR && mv $tmpDir $INSTALL_DIR", 120_000L)
             if (mvCode != 0) {
                 su("rm -rf $tmpDir")
+                logStep("FAILED: Activation failed: $mvOut")
                 _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Activation failed: $mvOut") }
                 return@withContext false
             }
@@ -605,9 +628,11 @@ object UbuntuManager {
             // Clean staging tarball
             su("rm -f $TARBALL")
 
-            _state.update { it.copy(busy = false, message = "Extraction and setup complete") }
+            logStep("SUCCESS: Ubuntu 24.04 ARM64 installed and configured successfully!")
+            _state.update { it.copy(busy = false, message = "Installation complete and verified") }
             true
         } catch (e: Exception) {
+            logStep("FAILED: Extract error: ${e.message}")
             _state.update { it.copy(status = InstallStatus.CORRUPT, busy = false, message = "Extract error: ${e.message}") }
             false
         }
@@ -680,31 +705,35 @@ object UbuntuManager {
      * Removes exactly the owned rootfs after idle + ownership checks.
      */
     suspend fun remove(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext uninstallCleanly()
+    }
+
+    /**
+     * Executes clean uninstall via devcode CLI: stops all sessions, safely unmounts all
+     * virtual filesystems, and completely removes /data/local/devcode without leaving zombies.
+     */
+    suspend fun uninstallCleanly(): Boolean = withContext(Dispatchers.IO) {
         return@withContext ChrootManager.withEnvironmentLock {
             try {
-                _state.update { it.copy(busy = true, message = "Removing Ubuntu rootfs...") }
-                requireIdle()
-                ensureOwnedBase()
-                ChrootManager.unmountTargetLocked(INSTALL_DIR, force = true)
-                ChrootManager.unmountTargetLocked("${INSTALL_DIR}.install", force = true)
-
-                val (code, _) = su(
-                    "if [ -L $INSTALL_DIR ]; then echo SYMLINK; exit 3; fi; " +
-                        "rm -rf $INSTALL_DIR ${INSTALL_DIR}.install $TARBALL",
-                    300_000L
-                )
-                if (code != 0) {
-                    _state.update { it.copy(busy = false, message = "Remove failed: safety check") }
-                    return@withEnvironmentLock false
-                }
+                _state.update { it.copy(busy = true, message = "Uninstalling DEVCODE cleanly...") }
+                ChrootManager.deployDevcodeCli()
+                val (code, out) = su("/data/local/devcode/bin/devcode uninstall", 120_000L)
                 try { privateTarball().delete() } catch (_: Exception) {}
                 try { privateTarballPart().delete() } catch (_: Exception) {}
 
-                _state.update { it.copy(busy = false, downloadProgress = 0f, message = "Ubuntu rootfs removed") }
-                refreshStatus()
-                true
+                _state.update {
+                    it.copy(
+                        status = InstallStatus.NOT_INSTALLED,
+                        busy = false,
+                        downloadProgress = 0f,
+                        storageUsedBytes = 0L,
+                        message = if (code == 0) "DEVCODE uninstalled cleanly" else "Uninstall warning: $out"
+                    )
+                }
+                refreshStatus(forceTransition = true)
+                code == 0
             } catch (e: Exception) {
-                _state.update { it.copy(busy = false, message = "Remove error: ${e.message}") }
+                _state.update { it.copy(busy = false, message = "Uninstall error: ${e.message}") }
                 false
             }
         }

@@ -40,7 +40,14 @@ object SetupWizard {
 
     private suspend fun chrootCmd(script: String, root: String = UbuntuManager.INSTALL_DIR): String {
         val chrootBin = ChrootManager.getChrootExecutable()
-        val escaped = script.replace("'", "'\\''")
+        val fullScript = """
+            export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            export HOME=/root
+            export USER=root
+            export TERM=xterm-256color
+            $script
+        """.trimIndent()
+        val escaped = fullScript.replace("'", "'\\''")
         return "if [ -x '$root/bin/bash' ] || [ -x '$root/usr/bin/bash' ]; then $chrootBin '$root' /bin/bash -c '$escaped'; else $chrootBin '$root' /bin/sh -c '$escaped'; fi"
     }
 
@@ -106,12 +113,34 @@ object SetupWizard {
                     if ! grep -E '^sudo:.*coder' "${'$'}R/etc/group" >/dev/null 2>&1; then
                         sed -i 's/^sudo:x:\([0-9]*\):.*/&,coder/;s/:,coder/:coder/' "${'$'}R/etc/group" 2>/dev/null || true
                     fi
+                else
+                    echo 'sudo:x:27:coder' >> "${'$'}R/etc/group"
                 fi
 
-                # Passwordless sudo for coder user
+                # Passwordless sudo for coder user (sudoers.d config)
                 mkdir -p "${'$'}R/etc/sudoers.d"
                 echo 'coder ALL=(ALL) NOPASSWD:ALL' > "${'$'}R/etc/sudoers.d/90-coder"
                 chmod 440 "${'$'}R/etc/sudoers.d/90-coder" 2>/dev/null || true
+
+                # Configure PAM su to allow members of sudo group without password
+                if [ -f "${'$'}R/etc/pam.d/su" ]; then
+                    if ! grep -q 'pam_wheel.so trust group=sudo' "${'$'}R/etc/pam.d/su" 2>/dev/null; then
+                        sed -i '1s/^/auth sufficient pam_wheel.so trust group=sudo\n/' "${'$'}R/etc/pam.d/su" 2>/dev/null || true
+                    fi
+                fi
+
+                # Install drop-in sudo bridge script in /usr/local/bin/sudo
+                # Allows 'sudo apt update' to work seamlessly even before sudo package is installed
+                mkdir -p "${'$'}R/usr/local/bin"
+                cat > "${'$'}R/usr/local/bin/sudo" <<'SUDO_EOF'
+#!/bin/sh
+# DEVCODE Sudo Bridge for coder user
+if [ "$(id -u)" = "0" ]; then
+    exec "$@"
+fi
+exec /bin/su - root -c "$*"
+SUDO_EOF
+                chmod 755 "${'$'}R/usr/local/bin/sudo" 2>/dev/null || true
 
                 # Ensure essential apt and temporary directories exist with correct permissions
                 mkdir -p "${'$'}R/var/lib/apt/lists/partial"

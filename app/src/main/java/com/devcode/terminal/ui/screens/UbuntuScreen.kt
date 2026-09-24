@@ -272,6 +272,35 @@ fun UbuntuScreen(
                             )
                         }
                     }
+
+                    // Detailed installation step-by-step logs
+                    if (ubuntuState.stepLogs.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF070B0E), RoundedCornerShape(8.dp))
+                                .padding(10.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                ubuntuState.stepLogs.takeLast(6).forEach { logLine ->
+                                    Text(
+                                        text = logLine,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                        ),
+                                        color = when {
+                                            logLine.contains("SUCCESS", ignoreCase = true) -> Color(0xFF10B981)
+                                            logLine.contains("FAILED", ignoreCase = true)  -> Color(0xFFF43F5E)
+                                            logLine.contains("Step", ignoreCase = true)    -> MaterialTheme.colorScheme.primary
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

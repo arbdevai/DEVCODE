@@ -100,15 +100,26 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 7. Hasil Rilis APK Terbaru (Build 16)
-- **GitHub Release Tag**: `build-16`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-16`
-- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-16/app-debug.apk`
-- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 16, VersionName `1.0.16`
-- **Changelog**:
-  - Fix status transition lock & du compatibility pada status validation.
-  - Passwordless sudo (`/etc/sudoers.d/90-coder`) sehingga `sudo apt update` & `sudo apt upgrade` bekerja mulus tanpa permission denied.
-  - Perbaikan direktori `/var/lib/apt/lists/partial` & `/var/cache/apt/archives/partial`.
-  - Fix izin session PID (`chmod 777 /run/devcode/sessions`) menghilangkan error session PID permission denied.
-  - Disable readline bracketed paste menghilangkan karakter ANSI escape `[?2004h`.
+## 7. Isolasi Total /dev, Sudo Bridge, CLI Controller & In-App Auto-Updater
+
+### A. Isolasi Total /dev via Tmpfs (Fix Crash Termux `/dev/ptmx`)
+- **Penyebab Crash Termux:** Kode sebelumnya melakukan `mount --bind /dev $R/dev` lalu menghapus file `$R/dev/ptmx` untuk diganti symlink. Karena berupa bind mount, file `/dev/ptmx` asli milik Android host ikut terhapus, menyebabkan Termux gagal mengalokasikan PTY (`RuntimeException: trouble with /dev/ptmx`).
+- **Solusi Tuntas:** `$R/dev` kini di-mount sebagai `tmpfs` mandiri terisolasi. Node karakter standar (`null`, `zero`, `random`, `urandom`, `tty`) di-bind mount secara individual ke dalam tmpfs tersebut. Host `/dev/ptmx` Android 100% aman dan tidak pernah disentuh sama sekali!
+
+### B. Ubuntu PATH & Sudo Bridge
+- Seluruh pemanggilan `chrootCmd` kini otomatis meng-export:
+  `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
+  Menghilangkan error `apt-get: command not found` / `chmod: command not found` (exit code 127).
+- Disediakan script sudo bridge di `/usr/local/bin/sudo` dan aturan PAM wheel su tanpa password, sehingga perintah `sudo apt update` dan `sudo apt install` langsung berfungsi bahkan sebelum paket `sudo` diinstal dari apt.
+
+### C. Command Manager CLI (`devcode stop`, `status`, `uninstall`)
+- Script CLI `/data/local/devcode/bin/devcode` dibuat otomatis dengan izin 755:
+  - `devcode stop`: Menghentikan seluruh proses session chroot DEVCODE dan melepas semua mount point DEVCODE tanpa menyentuh chroot lain.
+  - `devcode status`: Menampilkan status Ubuntu, mount aktif, PID sesi aktif, storage rootfs, dan user.
+  - `devcode uninstall`: Berhenti bersih dan menghapus `/data/local/devcode` tanpa meninggalkan proses atau mount zombie.
+- Tombol integrasi ditambahkan ke UI `SettingsScreen`.
+
+### D. Fitur In-App Check Update & Auto-Install APK
+- `UpdateManager` memeriksa GitHub Releases API secara otomatis.
+- Pengguna dapat mengecek update dan mengunduh APK langsung dari dalam aplikasi dengan progress bar real-time.
+- Mendukung **1-Click Silent Root Install** (`pm install -r -d`) serta fallback ke Android Package Installer Intent melalui `FileProvider`. Pengguna tidak perlu lagi membuka browser GitHub secara manual!

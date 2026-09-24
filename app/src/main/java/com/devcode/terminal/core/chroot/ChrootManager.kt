@@ -107,52 +107,64 @@ object ChrootManager {
      * or a temporary extraction directory).
      *
      * Isolation invariants:
-     * - Mount point is isolated via `--make-rprivate` so it does not propagate to other chroots on the device.
-     * - `/dev` uses `--make-rslave` to avoid publishing devices to the host or other chroots.
-     * - `/dev/pts` uses a dedicated `newinstance` mount to isolate DEVCODE pseudo-terminals.
+     * - Mount point is isolated via `mount --make-rprivate /` and `--make-rprivate $R`.
+     * - `$R/dev` is mounted as an independent isolated `tmpfs` so the Android host `/dev` is NEVER touched or modified!
+     * - Character nodes inside `$R/dev` are bind-mounted individually or created inside the tmpfs.
+     * - `/dev/pts` uses an isolated dedicated `newinstance` devpts mount.
+     * - `$R/dev/ptmx` symlinks to `pts/ptmx` STRICTLY inside the chroot tmpfs.
      */
     internal suspend fun mountTargetLocked(targetRoot: String = UBUNTU_ROOT): Boolean = withContext(Dispatchers.IO) {
         try {
             val mountScript = """
                 R="$targetRoot"
-                # Isolate mount hierarchy so other chroots on the device are never affected
+                # 1. Private mount namespace hierarchy to prevent leak to host or other chroots
+                mount --make-rprivate / 2>/dev/null || true
                 mount --make-rprivate "${'$'}R" 2>/dev/null || true
-                mkdir -p "${'$'}R/proc" "${'$'}R/sys" "${'$'}R/dev" "${'$'}R/dev/pts" "${'$'}R/etc" "${'$'}R$SESSION_RUN_DIR"
+                mkdir -p "${'$'}R/proc" "${'$'}R/sys" "${'$'}R/dev" "${'$'}R/dev/pts" "${'$'}R/dev/shm" "${'$'}R/etc" "${'$'}R$SESSION_RUN_DIR"
 
-                # 1. Procfs
+                # 2. Procfs
                 grep -q " ${'$'}R/proc " /proc/mounts || mount -t proc proc "${'$'}R/proc"
 
-                # 2. Sysfs
+                # 3. Sysfs
                 grep -q " ${'$'}R/sys " /proc/mounts || mount -t sysfs sysfs "${'$'}R/sys"
 
-                # 3. Dev bind mount with recursive slave
+                # 4. Dedicated isolated tmpfs on $R/dev (NEVER bind mount global host /dev!)
                 if ! grep -q " ${'$'}R/dev " /proc/mounts; then
-                    mount --bind /dev "${'$'}R/dev"
-                    mount --make-rslave "${'$'}R/dev" 2>/dev/null || mount --make-slave "${'$'}R/dev" 2>/dev/null || true
+                    mount -t tmpfs -o mode=755,nosuid dev "${'$'}R/dev"
+                    mkdir -p "${'$'}R/dev/pts" "${'$'}R/dev/shm"
                 fi
 
-                # 4. Devpts: isolated dedicated instance
+                # 5. Dedicated devpts newinstance inside chroot tmpfs
                 if ! grep -q " ${'$'}R/dev/pts " /proc/mounts; then
                     mount -t devpts -o newinstance,ptmxmode=0666,mode=620 devpts "${'$'}R/dev/pts" 2>/dev/null \
                         || mount -t devpts devpts "${'$'}R/dev/pts" 2>/dev/null \
-                        || mount --bind /dev/pts "${'$'}R/dev/pts" 2>/dev/null \
                         || true
                 fi
 
-                # Essential standard device nodes inside chroot
-                [ -e "${'$'}R/dev/null" ] || mknod -m 666 "${'$'}R/dev/null" c 1 3 2>/dev/null || true
-                [ -e "${'$'}R/dev/zero" ] || mknod -m 666 "${'$'}R/dev/zero" c 1 5 2>/dev/null || true
-                [ -e "${'$'}R/dev/random" ] || mknod -m 666 "${'$'}R/dev/random" c 1 8 2>/dev/null || true
-                [ -e "${'$'}R/dev/urandom" ] || mknod -m 666 "${'$'}R/dev/urandom" c 1 9 2>/dev/null || true
-                chmod 666 "${'$'}R/dev/pts/ptmx" 2>/dev/null || true
-                rm -f "${'$'}R/dev/ptmx" 2>/dev/null || true
-                ln -s pts/ptmx "${'$'}R/dev/ptmx" 2>/dev/null || true
+                # 6. Bind mount individual safe device nodes from host into chroot tmpfs
+                for node in null zero full random urandom tty; do
+                    if [ ! -e "${'$'}R/dev/${'$'}node" ]; then
+                        if [ -e "/dev/${'$'}node" ]; then
+                            touch "${'$'}R/dev/${'$'}node" 2>/dev/null || true
+                            mount --bind "/dev/${'$'}node" "${'$'}R/dev/${'$'}node" 2>/dev/null || true
+                        fi
+                    fi
+                done
 
-                # Session runtime directory with universal write permission
+                # 7. Standard device links strictly inside chroot tmpfs (NEVER touches host /dev!)
+                ln -sf pts/ptmx "${'$'}R/dev/ptmx"
+                chmod 666 "${'$'}R/dev/pts/ptmx" 2>/dev/null || true
+                chmod 666 "${'$'}R/dev/ptmx" 2>/dev/null || true
+                ln -sf /proc/self/fd "${'$'}R/dev/fd" 2>/dev/null || true
+                ln -sf /proc/self/fd/0 "${'$'}R/dev/stdin" 2>/dev/null || true
+                ln -sf /proc/self/fd/1 "${'$'}R/dev/stdout" 2>/dev/null || true
+                ln -sf /proc/self/fd/2 "${'$'}R/dev/stderr" 2>/dev/null || true
+
+                # 8. Session runtime directory with universal write permission
                 mkdir -p "${'$'}R$SESSION_RUN_DIR"
                 chmod 777 "${'$'}R$SESSION_RUN_DIR" 2>/dev/null || true
 
-                # 5. Shared storage (/sdcard) - only mount for the primary installation
+                # 9. Shared storage (/sdcard) - only mount for the primary installation
                 if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
                     if [ -d /sdcard ]; then
                         mkdir -p "${'$'}R/sdcard"
@@ -165,7 +177,7 @@ object ChrootManager {
                     fi
                 fi
 
-                # 6. DNS resolver
+                # 10. DNS resolver
                 mkdir -p "${'$'}R/etc"
                 if [ -L "${'$'}R/etc/resolv.conf" ]; then rm -f "${'$'}R/etc/resolv.conf"; fi
                 printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}R/etc/resolv.conf"
@@ -190,13 +202,35 @@ object ChrootManager {
 
             val unmountScript = """
                 R="$targetRoot"
-                # Explicit reverse unmount of known DEVCODE mount points
-                for m in "${'$'}R/sdcard" "${'$'}R/dev/pts" "${'$'}R/dev" "${'$'}R/sys" "${'$'}R/proc"; do
-                    if grep -q " ${'$'}m " /proc/mounts 2>/dev/null; then
-                        umount -l "${'$'}m" 2>/dev/null || umount "${'$'}m" 2>/dev/null || true
+                # 1. Unmount sdcard
+                if grep -q " ${'$'}R/sdcard " /proc/mounts 2>/dev/null; then
+                    umount -l "${'$'}R/sdcard" 2>/dev/null || true
+                fi
+
+                # 2. Unmount individual device nodes in $R/dev
+                for node in null zero full random urandom tty; do
+                    if grep -q " ${'$'}R/dev/${'$'}node " /proc/mounts 2>/dev/null; then
+                        umount -l "${'$'}R/dev/${'$'}node" 2>/dev/null || true
                     fi
                 done
-                # Catch any residual submounts strictly under target root
+
+                # 3. Unmount dev/pts and dev tmpfs
+                if grep -q " ${'$'}R/dev/pts " /proc/mounts 2>/dev/null; then
+                    umount -l "${'$'}R/dev/pts" 2>/dev/null || true
+                fi
+                if grep -q " ${'$'}R/dev " /proc/mounts 2>/dev/null; then
+                    umount -l "${'$'}R/dev" 2>/dev/null || true
+                fi
+
+                # 4. Unmount sys and proc
+                if grep -q " ${'$'}R/sys " /proc/mounts 2>/dev/null; then
+                    umount -l "${'$'}R/sys" 2>/dev/null || true
+                fi
+                if grep -q " ${'$'}R/proc " /proc/mounts 2>/dev/null; then
+                    umount -l "${'$'}R/proc" 2>/dev/null || true
+                fi
+
+                # 5. Catch any residual submounts strictly under target root
                 awk -v r="${'$'}R/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null | sort -r | while read -r p; do
                     [ -n "${'$'}p" ] && umount -l "${'$'}p" 2>/dev/null || true
                 done
@@ -445,6 +479,163 @@ object ChrootManager {
                 } catch (_: Throwable) {}
                 iterator.remove()
             }
+        }
+    }
+
+    /**
+     * Deploys the standalone `devcode` CLI script to /data/local/devcode/bin/devcode
+     * which supports: devcode stop, devcode status, and devcode uninstall.
+     */
+    suspend fun deployDevcodeCli(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val script = """
+                mkdir -p /data/local/devcode/bin
+                cat > /data/local/devcode/bin/devcode <<'DEVCODE_EOF'
+#!/system/bin/sh
+# DEVCODE Command Manager & Lifecycle Controller
+BASE="/data/local/devcode"
+UBUNTU="${'$'}BASE/ubuntu"
+SESSIONS_DIR="${'$'}UBUNTU/run/devcode/sessions"
+
+case "${'$'}1" in
+  stop)
+    echo ">> [DEVCODE] Stopping all DEVCODE sessions & mounts..."
+    # 1. Kill session processes registered via PID files
+    if [ -d "${'$'}SESSIONS_DIR" ]; then
+      for pidfile in "${'$'}SESSIONS_DIR"/*.pid; do
+        if [ -f "${'$'}pidfile" ]; then
+          pid=$(cat "${'$'}pidfile" 2>/dev/null)
+          if [ -n "${'$'}pid" ] && [ "${'$'}pid" -gt 0 ] 2>/dev/null; then
+            pkill -9 -P "${'$'}pid" 2>/dev/null || true
+            kill -9 "-${'$'}pid" 2>/dev/null || kill -9 "${'$'}pid" 2>/dev/null || true
+          fi
+          rm -f "${'$'}pidfile"
+        fi
+      done
+    fi
+
+    # 2. Terminate any processes whose root is inside DEVCODE (without touching other chroots)
+    for p in /proc/[0-9]*; do
+      pid=${'$'}{p#/proc/}
+      rlink=$(readlink "/proc/${'$'}pid/root" 2>/dev/null || true)
+      case "${'$'}rlink" in
+        "${'$'}UBUNTU"*)
+          kill -9 "${'$'}pid" 2>/dev/null || true
+          ;;
+      esac
+    done
+
+    # 3. Unmount only DEVCODE virtual mounts in reverse order
+    for m in "${'$'}UBUNTU/sdcard" "${'$'}UBUNTU/dev/pts" "${'$'}UBUNTU/dev/null" "${'$'}UBUNTU/dev/zero" "${'$'}UBUNTU/dev/random" "${'$'}UBUNTU/dev/urandom" "${'$'}UBUNTU/dev/tty" "${'$'}UBUNTU/dev" "${'$'}UBUNTU/sys" "${'$'}UBUNTU/proc"; do
+      if grep -q " ${'$'}m " /proc/mounts 2>/dev/null; then
+        umount -l "${'$'}m" 2>/dev/null || true
+      fi
+    done
+
+    # Catch any residual submounts strictly under /data/local/devcode/
+    awk -v r="${'$'}BASE/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null | sort -r | while read -r sub; do
+      [ -n "${'$'}sub" ] && umount -l "${'$'}sub" 2>/dev/null || true
+    done
+    echo ">> [DEVCODE] All DEVCODE sessions stopped and unmounted cleanly."
+    ;;
+
+  status)
+    echo "=========================================="
+    echo "        DEVCODE WORKSTATION STATUS        "
+    echo "=========================================="
+    if [ -x "${'$'}UBUNTU/bin/bash" ] || [ -x "${'$'}UBUNTU/usr/bin/bash" ]; then
+      echo "Status:       INSTALLED (Ubuntu 24.04 ARM64)"
+    else
+      echo "Status:       NOT INSTALLED"
+    fi
+
+    active_mounts=$(awk -v r="${'$'}BASE/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null)
+    if [ -n "${'$'}active_mounts" ]; then
+      echo "Mounts:       ACTIVE (${'$'}(echo "${'$'}active_mounts" | wc -l) mounted)"
+      echo "${'$'}active_mounts" | sed 's/^/  - /'
+    else
+      echo "Mounts:       NONE (Cleanly Unmounted)"
+    fi
+
+    session_pids=""
+    if [ -d "${'$'}SESSIONS_DIR" ]; then
+      for f in "${'$'}SESSIONS_DIR"/*.pid; do
+        [ -f "${'$'}f" ] && session_pids="${'$'}session_pids ${'$'}(cat "${'$'}f" 2>/dev/null)"
+      done
+    fi
+    if [ -n "${'$'}session_pids" ]; then
+      echo "Active PIDs:  ${'$'}session_pids"
+    else
+      echo "Active PIDs:  NONE"
+    fi
+
+    if [ -d "${'$'}UBUNTU" ]; then
+      used=${'$'}(du -sk "${'$'}UBUNTU" 2>/dev/null | awk '{print int(${'$'}1/1024)" MB"}' || echo "N/A")
+      avail=${'$'}(df -k "${'$'}UBUNTU" 2>/dev/null | tail -1 | awk '{print int(${'$'}4/1024)" MB"}' || echo "N/A")
+      echo "Rootfs:       Used: ${'$'}used | Available: ${'$'}avail"
+    fi
+
+    if [ -f "${'$'}UBUNTU/etc/passwd" ]; then
+      users=${'$'}(grep -E 'coder|root' "${'$'}UBUNTU/etc/passwd" | awk -F: '{print ${'$'}1" (UID "${'$'}3")"}' | tr '\n' ', ' | sed 's/, ${'$'}//')
+      echo "Users:        ${'$'}users"
+    fi
+    echo "=========================================="
+    ;;
+
+  uninstall)
+    echo ">> [DEVCODE] Uninstalling DEVCODE environment..."
+    sh "${'$'}0" stop
+    sleep 1
+    if awk -v r="${'$'}BASE/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null | grep -q .; then
+      echo "ERROR: Some DEVCODE mounts are still active. Aborting."
+      exit 1
+    fi
+    rm -rf "${'$'}BASE"
+    echo ">> [DEVCODE] Complete uninstall successful. Rootfs and configs removed."
+    ;;
+
+  *)
+    echo "Usage: devcode {stop|status|uninstall}"
+    exit 1
+    ;;
+esac
+DEVCODE_EOF
+                chmod 755 /data/local/devcode/bin/devcode
+                # Symlink to /data/local/bin if available
+                mkdir -p /data/local/bin 2>/dev/null || true
+                ln -sf /data/local/devcode/bin/devcode /data/local/bin/devcode 2>/dev/null || true
+            """.trimIndent()
+            val r = RootManager.runAsRoot(script, 15_000L)
+            r.isSuccess
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Executes `devcode stop` to kill all sessions and clean up mounts.
+     */
+    suspend fun stopAllCleanly(): String = withContext(Dispatchers.IO) {
+        try {
+            stopAll()
+            unmountAll(force = true)
+            val r = RootManager.runAsRoot("/data/local/devcode/bin/devcode stop", 30_000L)
+            if (r.stdout.isNotBlank()) r.stdout else "All sessions stopped and unmounted cleanly."
+        } catch (e: Exception) {
+            "Stop error: ${e.message}"
+        }
+    }
+
+    /**
+     * Executes `devcode status` to return comprehensive status report.
+     */
+    suspend fun getDevcodeStatus(): String = withContext(Dispatchers.IO) {
+        try {
+            deployDevcodeCli()
+            val r = RootManager.runAsRoot("/data/local/devcode/bin/devcode status", 15_000L)
+            if (r.stdout.isNotBlank()) r.stdout else "Unable to fetch status"
+        } catch (e: Exception) {
+            "Status error: ${e.message}"
         }
     }
 

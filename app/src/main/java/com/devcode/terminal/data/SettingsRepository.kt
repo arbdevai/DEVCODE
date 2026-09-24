@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.core.stringPreferencesKey
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -29,7 +30,20 @@ class SettingsRepository(ctx: Context) {
         store.edit { it[FONT_SIZE] = f.coerceIn(10f, 22f) }
     }
 
+    val githubToken: Flow<String> = store.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { preferences ->
+            preferences[GITHUB_TOKEN] ?: ""
+        }
+
+    suspend fun setGithubToken(token: String) {
+        store.edit { it[GITHUB_TOKEN] = token.trim() }
+    }
+
     companion object {
         private val FONT_SIZE = floatPreferencesKey("font_size")
+        private val GITHUB_TOKEN = stringPreferencesKey("github_token")
     }
 }

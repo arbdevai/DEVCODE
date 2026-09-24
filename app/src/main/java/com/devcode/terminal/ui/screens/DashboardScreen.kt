@@ -46,9 +46,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.devcode.terminal.DevCodeApp
 import com.devcode.terminal.core.terminal.TerminalManager
 import com.devcode.terminal.core.ubuntu.UbuntuManager
+import com.devcode.terminal.core.update.UpdateManager
+import com.devcode.terminal.core.update.UpdateState
 import com.devcode.terminal.ui.components.StatusRow
+import kotlinx.coroutines.launch
 
 @Composable
 fun DashboardScreen(
@@ -56,11 +61,17 @@ fun DashboardScreen(
     onOpenUbuntu: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var isRooted by remember { mutableStateOf<Boolean?>(null) }
+    val savedToken by DevCodeApp.settings.githubToken.collectAsState(initial = "")
+    val updaterStatus by UpdateManager.status.collectAsState()
 
     LaunchedEffect(Unit) {
         isRooted = UbuntuManager.checkRoot(timeoutMs = 15_000L)
         UbuntuManager.refreshStatus()
+        // Proactively check for updates
+        UpdateManager.checkForUpdates(context, savedToken)
     }
 
     val ubuntuState by UbuntuManager.state.collectAsState()
@@ -123,6 +134,66 @@ fun DashboardScreen(
                             fontWeight = FontWeight.Bold,
                             color = if (isInstalled) Color(0xFF10B981) else Color(0xFF0EA5E9),
                         )
+                    }
+                }
+            }
+        }
+
+        // --- In-App Update Alert Banner (when update available) ---
+        if (updaterStatus.state == UpdateState.AVAILABLE && updaterStatus.updateInfo != null) {
+            val update = updaterStatus.updateInfo!!
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF10B981).copy(alpha = 0.15f)
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "New Update: ${update.tagName}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF10B981)
+                            )
+                            Text(
+                                text = "Tap to install latest APK build directly",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    UpdateManager.downloadAndInstall(
+                                        context = context,
+                                        info = update,
+                                        customToken = savedToken,
+                                        preferRootInstall = true
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF10B981),
+                                contentColor = Color.White
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("Install", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
