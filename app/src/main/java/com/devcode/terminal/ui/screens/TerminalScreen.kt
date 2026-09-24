@@ -92,8 +92,8 @@ fun TerminalScreen(modifier: Modifier = Modifier) {
                                         TerminalManager.closeSession(s.id)
                                     } catch (_: Throwable) {}
                                 }
-                                ChrootManager.unmountAll(force = true)
-                                WorkspaceService.killAllSessionsAndUnmount(context)
+                                ChrootManager.stopAllCleanly()
+                                WorkspaceService.stop(context)
                             } catch (_: Throwable) {}
                         }
                     },

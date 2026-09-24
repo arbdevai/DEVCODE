@@ -81,11 +81,67 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var showExitDialog by remember { mutableStateOf(false) }
     var showUninstallDialog by remember { mutableStateOf(false) }
     var showStatusDialog by remember { mutableStateOf(false) }
+    var showChangelogDialog by remember { mutableStateOf(false) }
     var statusOutput by remember { mutableStateOf("") }
     var customTokenInput by remember(savedToken) { mutableStateOf(savedToken) }
     var showTokenConfig by remember { mutableStateOf(false) }
 
     val currentVersionCode = UpdateManager.getAppVersionCode(context)
+
+    // Changelog dialog
+    if (showChangelogDialog && updaterStatus.updateInfo != null) {
+        val info = updaterStatus.updateInfo!!
+        AlertDialog(
+            onDismissRequest = { showChangelogDialog = false },
+            icon = {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+            },
+            title = {
+                Text("Changelog: ${info.tagName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF070B0E), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = info.releaseBody,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color(0xFFE2E8F0),
+                        lineHeight = 15.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showChangelogDialog = false
+                        scope.launch {
+                            UpdateManager.downloadAndInstall(
+                                context = context,
+                                info = info,
+                                customToken = customTokenInput,
+                                preferRootInstall = true
+                            )
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Install Update", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChangelogDialog = false }) {
+                    Text("Close", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(16.dp),
+        )
+    }
 
     // Full exit confirmation dialog
     if (showExitDialog) {
@@ -121,8 +177,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                                 } catch (_: Throwable) {}
                             }
                             ChrootManager.stopAllCleanly()
-                            WorkspaceService.killAllSessionsAndUnmount(context)
-                            activity?.finishAndRemoveTask()
+                            WorkspaceService.stop(context)
+                            activity?.finishAffinity()
+                            kotlinx.coroutines.delay(150)
+                            android.os.Process.killProcess(android.os.Process.myPid())
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -316,10 +374,17 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                                 if (info.releaseBody.isNotBlank()) {
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = info.releaseBody.take(200) + if (info.releaseBody.length > 200) "..." else "",
+                                        text = info.releaseBody.take(150) + if (info.releaseBody.length > 150) "..." else "",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    TextButton(
+                                        onClick = { showChangelogDialog = true },
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                                    ) {
+                                        Text("View Full Changelog", style = MaterialTheme.typography.labelSmall, color = Color(0xFF10B981))
+                                    }
                                 }
                             }
                         }

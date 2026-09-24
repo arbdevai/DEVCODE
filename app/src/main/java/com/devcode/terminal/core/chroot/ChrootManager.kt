@@ -134,22 +134,24 @@ object ChrootManager {
                     mkdir -p "${'$'}R/dev/pts" "${'$'}R/dev/shm"
                 fi
 
-                # 5. Dedicated devpts newinstance inside chroot tmpfs
+                # 5. Dedicated devpts newinstance inside chroot tmpfs with standard tty gid (gid=5)
                 if ! grep -q " ${'$'}R/dev/pts " /proc/mounts; then
-                    mount -t devpts -o newinstance,ptmxmode=0666,mode=620 devpts "${'$'}R/dev/pts" 2>/dev/null \
+                    mount -t devpts devpts "${'$'}R/dev/pts" -o newinstance,gid=5,mode=620,ptmxmode=666 2>/dev/null \
+                        || mount -t devpts devpts "${'$'}R/dev/pts" -o gid=5,mode=620,ptmxmode=666 2>/dev/null \
                         || mount -t devpts devpts "${'$'}R/dev/pts" 2>/dev/null \
                         || true
                 fi
 
-                # 6. Bind mount individual safe device nodes from host into chroot tmpfs
-                for node in null zero full random urandom tty; do
-                    if [ ! -e "${'$'}R/dev/${'$'}node" ]; then
-                        if [ -e "/dev/${'$'}node" ]; then
-                            touch "${'$'}R/dev/${'$'}node" 2>/dev/null || true
-                            mount --bind "/dev/${'$'}node" "${'$'}R/dev/${'$'}node" 2>/dev/null || true
-                        fi
-                    fi
-                done
+                # 6. Create standard character devices directly with mknod -m 666 inside chroot tmpfs
+                # Guarantees standard 0666 permissions so coder user can always write to /dev/null
+                rm -f "${'$'}R/dev/null" "${'$'}R/dev/zero" "${'$'}R/dev/full" "${'$'}R/dev/random" "${'$'}R/dev/urandom" "${'$'}R/dev/tty"
+                mknod -m 666 "${'$'}R/dev/null" c 1 3 2>/dev/null || (touch "${'$'}R/dev/null" && mount --bind /dev/null "${'$'}R/dev/null" 2>/dev/null) || true
+                mknod -m 666 "${'$'}R/dev/zero" c 1 5 2>/dev/null || (touch "${'$'}R/dev/zero" && mount --bind /dev/zero "${'$'}R/dev/zero" 2>/dev/null) || true
+                mknod -m 666 "${'$'}R/dev/full" c 1 7 2>/dev/null || (touch "${'$'}R/dev/full" && mount --bind /dev/full "${'$'}R/dev/full" 2>/dev/null) || true
+                mknod -m 666 "${'$'}R/dev/random" c 1 8 2>/dev/null || (touch "${'$'}R/dev/random" && mount --bind /dev/random "${'$'}R/dev/random" 2>/dev/null) || true
+                mknod -m 666 "${'$'}R/dev/urandom" c 1 9 2>/dev/null || (touch "${'$'}R/dev/urandom" && mount --bind /dev/urandom "${'$'}R/dev/urandom" 2>/dev/null) || true
+                mknod -m 666 "${'$'}R/dev/tty" c 5 0 2>/dev/null || (touch "${'$'}R/dev/tty" && mount --bind /dev/tty "${'$'}R/dev/tty" 2>/dev/null) || true
+                chmod 666 "${'$'}R/dev/null" "${'$'}R/dev/zero" "${'$'}R/dev/full" "${'$'}R/dev/random" "${'$'}R/dev/urandom" "${'$'}R/dev/tty" 2>/dev/null || true
 
                 # 7. Standard device links strictly inside chroot tmpfs (NEVER touches host /dev!)
                 ln -sf pts/ptmx "${'$'}R/dev/ptmx"
@@ -372,6 +374,7 @@ object ChrootManager {
                 // Interactive command with PTY wrapper support via script -qefc
                 val fullCommand = """
                     $DEFAULT_ENV
+                    chmod 666 "$UBUNTU_ROOT/dev/null" 2>/dev/null || true
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
                     chmod 777 "$UBUNTU_ROOT$SESSION_RUN_DIR" 2>/dev/null || true
                     touch "$UBUNTU_ROOT$markerFile" 2>/dev/null || true

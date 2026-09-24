@@ -49,14 +49,9 @@ data class UpdaterStatus(
 object UpdateManager {
 
     private const val GITHUB_API_LATEST = "https://api.github.com/repos/arbdevai/DEVCODE/releases/latest"
-    const val DEFAULT_TOKEN = "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"
 
     private val _status = MutableStateFlow(UpdaterStatus())
     val status = _status.asStateFlow()
-
-    private fun getEffectiveToken(customToken: String?): String {
-        return if (!customToken.isNullOrBlank()) customToken.trim() else DEFAULT_TOKEN
-    }
 
     fun getAppVersionCode(context: Context): Int {
         return try {
@@ -75,7 +70,6 @@ object UpdateManager {
     suspend fun checkForUpdates(context: Context, customToken: String? = null): UpdateInfo? = withContext(Dispatchers.IO) {
         try {
             _status.value = UpdaterStatus(state = UpdateState.CHECKING, message = "Checking for latest release...")
-            val token = getEffectiveToken(customToken)
             val currentCode = getAppVersionCode(context)
 
             val conn = (URL(GITHUB_API_LATEST).openConnection() as HttpURLConnection).apply {
@@ -83,8 +77,8 @@ object UpdateManager {
                 readTimeout = 15_000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "DEVCODE-Updater/1.0")
-                if (token.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $token")
+                if (!customToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer ${customToken.trim()}")
                 }
             }
 
@@ -103,9 +97,9 @@ object UpdateManager {
             val json = JSONObject(body)
             val tagName = json.optString("tag_name", "")
             val name = json.optString("name", tagName)
-            val releaseNotes = json.optString("body", "")
+            val releaseNotes = json.optString("body", "").ifBlank { "Regular bug fixes and performance improvements." }
 
-            // Parse build number from tag (e.g. "build-18" -> 18)
+            // Parse build number from tag (e.g. "build-20" -> 20)
             val buildNum = Regex("""\d+""").find(tagName)?.value?.toIntOrNull() ?: 0
 
             val assets = json.optJSONArray("assets")
@@ -171,38 +165,37 @@ object UpdateManager {
                 state = UpdateState.DOWNLOADING,
                 updateInfo = info,
                 progress = 0f,
-                message = "Starting APK download..."
+                message = "Connecting to download server..."
             )
 
-            val token = getEffectiveToken(customToken)
-            // Use asset API url if token exists (for private repos), otherwise browser download url
-            val targetUrl = if (token.isNotBlank() && info.assetUrl.isNotBlank()) info.assetUrl else info.browserDownloadUrl
+            // For public repos, browserDownloadUrl is directly accessible
+            val targetUrl = if (info.browserDownloadUrl.isNotBlank()) info.browserDownloadUrl else info.assetUrl
 
-            val conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            var conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 30_000
                 readTimeout = 30_000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "DEVCODE-Updater/1.0")
-                if (token.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $token")
-                    setRequestProperty("Accept", "application/octet-stream")
+                if (!customToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer ${customToken.trim()}")
                 }
             }
 
-            var downloadConn = conn
             var respCode = conn.responseCode
-
-            // Handle GitHub API 302 redirect to AWS S3 signed asset URL
-            if (respCode == HttpURLConnection.HTTP_MOVED_TEMP || respCode == HttpURLConnection.HTTP_MOVED_PERM || respCode == 307 || respCode == 308) {
+            var redirects = 0
+            while ((respCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    respCode == HttpURLConnection.HTTP_MOVED_PERM ||
+                    respCode == 307 || respCode == 308) && redirects < 5) {
                 val redirectUrl = conn.getHeaderField("Location")
                 conn.disconnect()
-                downloadConn = (URL(redirectUrl).openConnection() as HttpURLConnection).apply {
+                conn = (URL(redirectUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 30_000
                     readTimeout = 30_000
                     instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "DEVCODE-Updater/1.0")
                 }
-                respCode = downloadConn.responseCode
+                respCode = conn.responseCode
+                redirects++
             }
 
             if (respCode !in 200..299) {
@@ -213,13 +206,12 @@ object UpdateManager {
                 return@withContext false
             }
 
-            val totalBytes = downloadConn.contentLengthLong.let { if (it > 0) it else info.assetSize }
+            val totalBytes = conn.contentLengthLong.let { if (it > 0) it else info.assetSize }
 
-            // Save APK to external cache or app cache
             val updateFile = File(context.cacheDir, "devcode-update.apk")
             if (updateFile.exists()) updateFile.delete()
 
-            downloadConn.inputStream.use { input ->
+            conn.inputStream.use { input ->
                 FileOutputStream(updateFile).use { output ->
                     val buf = ByteArray(64 * 1024)
                     var readBytes = 0L
@@ -239,12 +231,12 @@ object UpdateManager {
                     output.flush()
                 }
             }
-            downloadConn.disconnect()
+            conn.disconnect()
 
             _status.value = _status.value.copy(
                 state = UpdateState.INSTALLING,
                 progress = 1f,
-                message = "Installing update..."
+                message = "Installing update with root package manager..."
             )
 
             // Method 1: Seamless Root Install (1-Click Silent Install on Rooted Android)
@@ -257,7 +249,7 @@ object UpdateManager {
                     if (pmResult.isSuccess && pmResult.stdout.contains("Success", ignoreCase = true)) {
                         _status.value = UpdaterStatus(
                             state = UpdateState.UP_TO_DATE,
-                            message = "Update installed successfully via root! Reopening..."
+                            message = "Update installed successfully via root!"
                         )
                         RootManager.runAsRoot("rm -f /data/local/tmp/devcode-update.apk", 5_000L)
                         return@withContext true

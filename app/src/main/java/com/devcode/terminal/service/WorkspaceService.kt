@@ -31,19 +31,8 @@ class WorkspaceService : Service() {
         const val ACTION_STOP = "com.devcode.terminal.STOP_SERVICE"
         const val ACTION_KILL_ALL = "com.devcode.terminal.KILL_ALL"
 
-        /**
-         * Global cleanup of all sessions and unmount of rootfs.
-         * Called when user explicitly wants to terminate all terminal sessions.
-         */
         fun killAllSessionsAndUnmount(context: Context) {
-            val intent = Intent(context, WorkspaceService::class.java).apply {
-                action = ACTION_KILL_ALL
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            stop(context)
         }
 
         fun start(context: Context) {
@@ -58,10 +47,9 @@ class WorkspaceService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, WorkspaceService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            try {
+                context.stopService(Intent(context, WorkspaceService::class.java))
+            } catch (_: Throwable) {}
         }
     }
 
@@ -73,23 +61,10 @@ class WorkspaceService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_KILL_ALL -> {
-                serviceScope.launch {
-                    try {
-                        ChrootManager.stopAll()
-                        ChrootManager.unmountAll(force = true)
-                    } catch (_: Throwable) {}
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
-                return START_NOT_STICKY
-            }
-            ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
+        if (intent?.action == ACTION_STOP || intent?.action == ACTION_KILL_ALL) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         val notification = buildNotification("DEVCODE Linux session active")

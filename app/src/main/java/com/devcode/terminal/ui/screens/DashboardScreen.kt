@@ -19,9 +19,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -31,6 +33,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -78,6 +81,62 @@ fun DashboardScreen(
     val ubuntuState by UbuntuManager.state.collectAsState()
     val sessions by TerminalManager.sessions.collectAsState()
     val isInstalled = ubuntuState.status == UbuntuManager.InstallStatus.INSTALLED
+    var showChangelogDialog by remember { mutableStateOf(false) }
+
+    // Changelog dialog
+    if (showChangelogDialog && updaterStatus.updateInfo != null) {
+        val info = updaterStatus.updateInfo!!
+        AlertDialog(
+            onDismissRequest = { showChangelogDialog = false },
+            icon = {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+            },
+            title = {
+                Text("Changelog: ${info.tagName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF070B0E), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = info.releaseBody,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color(0xFFE2E8F0),
+                        lineHeight = 15.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showChangelogDialog = false
+                        scope.launch {
+                            UpdateManager.downloadAndInstall(
+                                context = context,
+                                info = info,
+                                customToken = savedToken,
+                                preferRootInstall = true
+                            )
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Install Update", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChangelogDialog = false }) {
+                    Text("Close", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(16.dp),
+        )
+    }
 
     LazyColumn(
         modifier = modifier
@@ -170,11 +229,19 @@ fun DashboardScreen(
                                 color = Color(0xFF10B981)
                             )
                             Text(
-                                text = "Tap to install latest APK build directly",
+                                text = "Tap to install or view changelog",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        OutlinedButton(
+                            onClick = { showChangelogDialog = true },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Text("Changelog", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         Button(
                             onClick = {
                                 scope.launch {
