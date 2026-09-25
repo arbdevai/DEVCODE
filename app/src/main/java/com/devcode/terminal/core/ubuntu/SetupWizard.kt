@@ -35,7 +35,9 @@ object SetupWizard {
         "nano",
         "vim",
         "sudo",
-        "ca-certificates"
+        "ca-certificates",
+        "iputils-ping",
+        "net-tools"
     )
 
     private suspend fun chrootCmd(script: String, root: String = UbuntuManager.INSTALL_DIR): String {
@@ -124,11 +126,10 @@ object SetupWizard {
 
                 # Configure PAM su & sudo with pam_permit for passwordless elevation
                 mkdir -p "${'$'}R/etc/pam.d"
-                printf "auth sufficient pam_permit.so\naccount sufficient pam_permit.so\nsession sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/su"
-                printf "auth sufficient pam_permit.so\naccount sufficient pam_permit.so\nsession sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/sudo"
+                printf "auth       sufficient pam_rootok.so\nauth       sufficient pam_permit.so\naccount    sufficient pam_permit.so\nsession    sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/su"
+                printf "auth       sufficient pam_rootok.so\nauth       sufficient pam_permit.so\naccount    sufficient pam_permit.so\nsession    sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/sudo"
 
-                # Install robust sudo bridge in /usr/local/bin/sudo
-                # Connects to the DEVCODE background root bridge FIFO, bypassing Android nosuid limitations
+                # Configure /usr/local/bin/sudo: prefers native su (if suid works), with FIFO bridge fallback
                 mkdir -p "${'$'}R/usr/local/bin"
                 cat > "${'$'}R/usr/local/bin/sudo" <<'SUDO_EOF'
 #!/bin/sh
@@ -137,18 +138,31 @@ if [ "${'$'}(id -u)" = "0" ]; then
     exec "${'$'}@"
 fi
 
+# 1. Native su execution (fastest and cleanest when suid is active)
+if /bin/su - root -c "true" 2>/dev/null; then
+    exec /bin/su - root -c "${'$'}*"
+fi
+if su - root -c "true" 2>/dev/null; then
+    exec su - root -c "${'$'}*"
+fi
+
+# 2. FIFO root daemon bridge fallback
 FIFO="/run/devcode/sudo.fifo"
 if [ -p "${'$'}FIFO" ]; then
-    TTY="${'$'}(tty 2>/dev/null || echo '/dev/tty')"
     PID="${'$'}${'$'}"
     RET="/run/devcode/sudo.ret.${'$'}PID"
-    rm -f "${'$'}RET" 2>/dev/null
-    echo "${'$'}PID|${'$'}TTY|${'$'}PWD|${'$'}*" > "${'$'}FIFO"
+    OUT="/run/devcode/sudo.out.${'$'}PID"
+    rm -f "${'$'}RET" "${'$'}OUT" 2>/dev/null
+    mkfifo -m 666 "${'$'}OUT" 2>/dev/null || true
+    echo "${'$'}PID|${'$'}PWD|${'$'}*" > "${'$'}FIFO"
+    cat "${'$'}OUT" 2>/dev/null &
+    CAT_PID=${'$'}!
     while [ ! -f "${'$'}RET" ]; do
         sleep 0.05 2>/dev/null || usleep 50000 2>/dev/null || sleep 1 2>/dev/null || true
     done
+    wait ${'$'}CAT_PID 2>/dev/null || true
     CODE=${'$'}(cat "${'$'}RET" 2>/dev/null || echo 0)
-    rm -f "${'$'}RET" 2>/dev/null
+    rm -f "${'$'}RET" "${'$'}OUT" 2>/dev/null
     exit ${'$'}{CODE:-0}
 fi
 
@@ -172,12 +186,18 @@ SUDO_EOF
                     echo 'coder:x:1000:1000:coder:/home/coder:/bin/bash' >> "${'$'}R/etc/passwd"
                 fi
 
-                # 3. Shadow record in /etc/shadow
+                # 3. Shadow record in /etc/shadow - root has blank password for seamless passwordless su
                 if [ -f "${'$'}R/etc/shadow" ]; then
+                    sed -i 's/^root:[^:]*:/root::/' "${'$'}R/etc/shadow" 2>/dev/null || true
                     if ! grep -q '^coder:' "${'$'}R/etc/shadow" 2>/dev/null; then
-                        echo 'coder:*:19800:0:99999:7:::' >> "${'$'}R/etc/shadow"
+                        echo 'coder::19800:0:99999:7:::' >> "${'$'}R/etc/shadow"
+                    else
+                        sed -i 's/^coder:[^:]*:/coder::/' "${'$'}R/etc/shadow" 2>/dev/null || true
                     fi
                 fi
+
+                # Ensure setuid bit on su binary inside rootfs
+                chmod 4755 "${'$'}R/bin/su" "${'$'}R/usr/bin/su" 2>/dev/null || true
 
                 # Verify coder is present in passwd
                 grep -q '^coder:' "${'$'}R/etc/passwd"

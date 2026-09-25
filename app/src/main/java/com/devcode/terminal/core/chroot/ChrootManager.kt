@@ -120,6 +120,9 @@ object ChrootManager {
                 # 1. Private mount namespace hierarchy to prevent leak to host or other chroots
                 mount --make-rprivate / 2>/dev/null || true
                 mount --make-rprivate "${'$'}R" 2>/dev/null || true
+                # Remount rootfs with suid enabled so su binary can switch UID
+                mount --bind "${'$'}R" "${'$'}R" 2>/dev/null || true
+                mount -o remount,suid,dev "${'$'}R" 2>/dev/null || true
                 mkdir -p "${'$'}R/proc" "${'$'}R/sys" "${'$'}R/dev" "${'$'}R/dev/pts" "${'$'}R/dev/shm" "${'$'}R/etc" "${'$'}R$SESSION_RUN_DIR"
 
                 # 2. Procfs
@@ -128,9 +131,9 @@ object ChrootManager {
                 # 3. Sysfs
                 grep -q " ${'$'}R/sys " /proc/mounts || mount -t sysfs sysfs "${'$'}R/sys"
 
-                # 4. Dedicated isolated tmpfs on target dev (NEVER bind mount global host /dev!)
+                # 4. Dedicated isolated tmpfs on target dev with explicit dev,rw options (never nodev!)
                 if ! grep -q " ${'$'}R/dev " /proc/mounts; then
-                    mount -t tmpfs -o mode=755,nosuid dev "${'$'}R/dev"
+                    mount -t tmpfs -o mode=755,dev,rw dev "${'$'}R/dev"
                     mkdir -p "${'$'}R/dev/pts" "${'$'}R/dev/shm"
                 fi
 
@@ -162,38 +165,47 @@ object ChrootManager {
                 ln -sf /proc/self/fd/1 "${'$'}R/dev/stdout" 2>/dev/null || true
                 ln -sf /proc/self/fd/2 "${'$'}R/dev/stderr" 2>/dev/null || true
 
+                # Ensure su has setuid permission inside rootfs
+                chmod 4755 "${'$'}R/bin/su" "${'$'}R/usr/bin/su" 2>/dev/null || true
+
                 # 8. Session runtime directory with universal write permission
                 mkdir -p "${'$'}R$SESSION_RUN_DIR"
                 chmod 777 "${'$'}R$SESSION_RUN_DIR" 2>/dev/null || true
                 mkdir -p "${'$'}R/run/devcode"
                 chmod 777 "${'$'}R/run/devcode" 2>/dev/null || true
 
-                # 9. Start root execution daemon for universal sudo bridge (works on nosuid /data)
+                # 9. Start persistent background root daemon inside chroot for universal sudo bridge
                 FIFO="${'$'}R/run/devcode/sudo.fifo"
                 rm -f "${'$'}FIFO" 2>/dev/null || true
                 mkfifo -m 666 "${'$'}FIFO" 2>/dev/null || true
                 chmod 666 "${'$'}FIFO" 2>/dev/null || true
 
-                (
-                    while [ -p "${'$'}FIFO" ]; do
-                        if read -r req < "${'$'}FIFO"; then
-                            [ -z "${'$'}req" ] && continue
-                            SPID=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f1)
-                            STTY=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f2)
-                            SDIR=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f3)
-                            SCMD=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f4-)
+                # Launch daemon inside chroot with setsid so it survives subshell exits
+                setsid chroot "${'$'}R" /bin/sh -c '
+                    FIFO="/run/devcode/sudo.fifo"
+                    while [ -p "$FIFO" ]; do
+                        if read -r req < "$FIFO"; then
+                            [ -z "$req" ] && continue
+                            SPID=$(printf "%s\n" "$req" | cut -d"|" -f1)
+                            SDIR=$(printf "%s\n" "$req" | cut -d"|" -f2)
+                            SCMD=$(printf "%s\n" "$req" | cut -d"|" -f3-)
                             (
-                                cd "${'$'}SDIR" 2>/dev/null || true
+                                cd "$SDIR" 2>/dev/null || cd /root
                                 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
                                 export HOME=/root
                                 export USER=root
                                 export TERM=xterm-256color
-                                eval "${'$'}SCMD"
-                                echo "${'$'}?" > "${'$'}R/run/devcode/sudo.ret.${'$'}SPID" 2>/dev/null
-                            ) < "${'$'}STTY" > "${'$'}STTY" 2>&1 &
+                                OUT="/run/devcode/sudo.out.$SPID"
+                                if [ -p "$OUT" ]; then
+                                    eval "$SCMD" > "$OUT" 2>&1
+                                else
+                                    eval "$SCMD"
+                                fi
+                                echo "$?" > "/run/devcode/sudo.ret.$SPID"
+                            ) &
                         fi
                     done
-                ) 2>/dev/null &
+                ' </dev/null >/dev/null 2>&1 &
 
                 # 10. Shared storage (/sdcard) - only mount for the primary installation
                 if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
@@ -403,16 +415,18 @@ object ChrootManager {
                 val chrootBin = getChrootExecutable()
 
                 val markerFile = "$SESSION_RUN_DIR/$id.pid"
-                // Run script as coder user so the allocated PTY slave is owned by coder (avoiding EPERM in tcsetpgrp)
+                val termLog = "$SESSION_RUN_DIR/term-$id.log"
+                // Launch PTY session: use regular term log file if /dev/null cannot be opened by script
                 val fullCommand = """
                     $DEFAULT_ENV
-                    chmod 666 "$UBUNTU_ROOT/dev/null" "$UBUNTU_ROOT/dev/zero" "$UBUNTU_ROOT/dev/tty" 2>/dev/null || true
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
                     chmod 777 "$UBUNTU_ROOT$SESSION_RUN_DIR" 2>/dev/null || true
                     touch "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
                     chmod 666 "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
+                    touch "$UBUNTU_ROOT$termLog" 2>/dev/null || true
+                    chmod 666 "$UBUNTU_ROOT$termLog" 2>/dev/null || true
                     if [ -x "$UBUNTU_ROOT/usr/bin/script" ]; then
-                        $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; exec /usr/bin/script -qefc 'exec /bin/bash -i' /dev/null"
+                        $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; OUT_FILE='$termLog'; [ -w /dev/null ] && OUT_FILE='/dev/null'; exec /usr/bin/script -qefc 'exec /bin/bash -i' \"${'$'}OUT_FILE\""
                     else
                         $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; exec /bin/bash -i"
                     fi

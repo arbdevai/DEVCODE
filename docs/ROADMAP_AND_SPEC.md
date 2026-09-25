@@ -151,14 +151,11 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 11. Hasil Rilis APK Terbaru (Build 26)
-- **GitHub Release Tag**: `build-26`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-26`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-26/app-debug.apk`
-- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 26, VersionName `1.0.26`
+## 12. Hasil Rilis APK Terbaru (Build 27+ - Final Stabilization)
+- **GitHub Release Tag**: `build-latest`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
 - **Changelog**:
-  - Dpkg auto-recovery: pembersihan stale lock files, otomatis `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi paket.
-  - Universal Sudo Bridge: didukung root daemon FIFO (`/run/devcode/sudo.fifo`) dan konfigurasi PAM permit, menjamin `sudo apt update` dan `sudo apt install` berjalan mulus sebagai root tanpa password.
-  - PTY allocation fix: menjalankan `script` sebagai user `coder` sehingga PTY slave dimiliki oleh `coder:tty`, menghilangkan error `cannot set terminal process group (-1)`.
-  - Notifikasi status bar dinamis menampilkan jumlah & nama sesi aktif, dilengkapi tombol aksi 1-sentuh **[EXIT & KILL ALL]** langsung di laci notifikasi Android.
+  - Perbaikan tuntas Sudo Bridge: didukung root daemon FIFO yang meneruskan stdout/stderr secara real-time via named pipe (`sudo.out.$PID`) sehingga `sudo sh -c 'id > /tmp/root-test.txt'` dan `sudo apt update` berfungsi penuh dengan output langsung.
+  - Penambahan paket default jaringan: `iputils-ping` dan `net-tools` pada toolchain development.
+  - Perbaikan PTY allocation: PTY logfile diarahkan ke file reguler di `$SESSION_RUN_DIR/term-$id.log` saat `/dev/null` ditolak oleh `script`, memastikan PTY slave selalu teralokasi sempurna tanpa error process group.
+  - Pengaktifan opsi `dev,rw` pada `mount -t tmpfs -o mode=755,dev,rw dev "$R/dev"` agar character devices dapat dibuka oleh seluruh user.
