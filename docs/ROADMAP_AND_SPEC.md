@@ -151,15 +151,12 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 12. Hasil Rilis APK Terbaru (Build 29 - Full Sudo Bridge & Terminal Fix)
-- **GitHub Release Tag**: `build-29`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-29`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-29/app-debug.apk`
-- **Version**: VersionCode 29, VersionName `1.0.29`
+## 13. Hasil Rilis APK Terbaru (Production-Ready Architecture)
+- **GitHub Release Tag**: `build-latest`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
 - **Changelog**:
-  - Perbaikan tuntas Sudo Bridge: didukung root daemon FIFO yang meneruskan stdout/stderr secara real-time via named pipe (`sudo.out.$PID`) sehingga `sudo sh -c 'id > /tmp/root-test.txt'` dan `sudo apt update` berfungsi penuh dengan output langsung di terminal.
-  - Penambahan paket default jaringan: `iputils-ping` dan `net-tools` pada toolchain development.
-  - Perbaikan PTY allocation: PTY logfile diarahkan ke file reguler di `$SESSION_RUN_DIR/term-$id.log` saat `/dev/null` ditolak oleh `script`, memastikan PTY slave selalu teralokasi sempurna tanpa error process group.
-  - Pengaktifan opsi `dev,rw` pada `mount -t tmpfs -o mode=755,dev,rw dev "$R/dev"` agar character devices dapat dibuka oleh seluruh user.
-  - Pembersihan otomatis stale lock files, eksekusi otomatis `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi paket.
-  - Notifikasi status bar dinamis menampilkan status sesi aktif, dilengkapi tombol 1-sentuh **[EXIT & KILL ALL]** langsung di laci notifikasi Android.
+  - Fitur System Diagnostics & 1-Tap Copy Logs: Ditambahkan `AppLogger` yang mengumpulkan log sistem, mount, PTY, sudo, dan updater lengkap dengan tombol salin laporan diagnostik di menu Settings untuk mempermudah debugging tanpa perlu keahlian teknis.
+  - Sudo Bridge Multi-Fallback: Mengeksekusi su native secara langsung dengan hak akses pam_permit dan passwordless elevation di `/etc/pam.d/su`, `/etc/pam.d/su-l`, `/etc/pam.d/sudo`, dan `/etc/shadow`, didukung fallback non-blocking file-based IPC queue di `/run/devcode/sudo` yang tidak akan pernah mengalami hang atau deadlock.
+  - PTY Allocation Bulletproof: Logfile PTY diarahkan ke `$SESSION_RUN_DIR/term-$id.log` atau `/tmp` sehingga `/usr/bin/script` tidak pernah gagal membuka file output, memastikan PTY slave selalu dialokasikan dan bebas dari error process group.
+  - Dpkg Auto-Recovery & Networking: Pembersihan lock otomatis, auto-recovery `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi, serta penambahan paket `iputils-ping` dan `net-tools` secara default.
+  - Status Bar Controller: Notifikasi dinamis memantau sesi aktif dengan tombol 1-sentuh **[EXIT & KILL ALL]** untuk menghentikan seluruh proses Linux dan unmount filesystem seketika dari laci notifikasi Android.

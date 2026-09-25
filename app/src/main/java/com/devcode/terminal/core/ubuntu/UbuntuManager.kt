@@ -2,6 +2,7 @@ package com.devcode.terminal.core.ubuntu
 
 import android.content.Context
 import com.devcode.terminal.core.chroot.ChrootManager
+import com.devcode.terminal.core.logging.AppLogger
 import com.devcode.terminal.core.root.RootManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,6 +70,7 @@ object UbuntuManager {
     val state: StateFlow<UbuntuState> = _state.asStateFlow()
 
     fun logStep(entry: String) {
+        AppLogger.log("UBUNTU", entry, isError = entry.contains("FAILED", ignoreCase = true) || entry.contains("error", ignoreCase = true))
         val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         _state.update {
             it.copy(

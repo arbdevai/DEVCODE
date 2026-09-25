@@ -1,6 +1,7 @@
 package com.devcode.terminal.core.ubuntu
 
 import com.devcode.terminal.core.chroot.ChrootManager
+import com.devcode.terminal.core.logging.AppLogger
 import com.devcode.terminal.core.root.RootManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,9 +10,9 @@ import kotlinx.coroutines.withContext
  * Bootstrap and development environment provisioning wizard for the Ubuntu rootfs.
  *
  * Provisioning Architecture:
- * - Bootstrap (DNS, user 'coder', Android network GIDs, workspace, shell config) is performed
- *   directly from the Android host filesystem using root permissions without invoking chroot.
- * - This eliminates dependencies on chroot/bash/useradd binaries during the initial installation.
+ * - Bootstrap (DNS, user 'coder', Android network GIDs, workspace, shell config, sudo bridge)
+ *   is performed directly from the Android host filesystem using root permissions without invoking chroot.
+ * - This eliminates dependencies on chroot/bash/useradd binaries during initial installation.
  * - Chroot is only used for apt package installations and interactive terminal sessions.
  */
 object SetupWizard {
@@ -21,6 +22,7 @@ object SetupWizard {
 
     /**
      * Essential dev packages installed into the Ubuntu rootfs.
+     * Includes iputils-ping and net-tools by default.
      */
     val DEV_PACKAGES = listOf(
         "git",
@@ -54,17 +56,29 @@ object SetupWizard {
     }
 
     /**
-     * Direct host-side bootstrap: DNS + user + workspace + shell config.
+     * Direct host-side bootstrap: DNS + user + workspace + shell config + sudo bridge.
      * Operates directly on the host filesystem path [root] without invoking chroot.
      */
     suspend fun bootstrap(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (!ensureDns(root)) return@withContext false
-            if (!ensureUser(root)) return@withContext false
-            if (!ensureWorkspace(root)) return@withContext false
+            AppLogger.log("BOOTSTRAP", "Starting host-side provisioning for $root")
+            if (!ensureDns(root)) {
+                AppLogger.error("BOOTSTRAP", "ensureDns failed")
+                return@withContext false
+            }
+            if (!ensureUser(root)) {
+                AppLogger.error("BOOTSTRAP", "ensureUser failed")
+                return@withContext false
+            }
+            if (!ensureWorkspace(root)) {
+                AppLogger.error("BOOTSTRAP", "ensureWorkspace failed")
+                return@withContext false
+            }
             ensureShellConfig(root)
+            AppLogger.log("BOOTSTRAP", "Host-side provisioning completed successfully")
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.error("BOOTSTRAP", "Bootstrap exception: ${e.message}")
             false
         }
     }
@@ -91,18 +105,21 @@ object SetupWizard {
     }
 
     /**
-     * Provisions Android networking groups and the primary 'coder' user
-     * directly into [root]/etc/passwd, [root]/etc/group, and [root]/etc/shadow.
+     * Provisions Android networking groups, the primary 'coder' user, PAM configurations,
+     * and the Universal Sudo Bridge directly on the host filesystem plane.
      *
-     * Required Android Network GIDs:
-     * - 3003 (aid_inet): required by Android kernel to open AF_INET sockets.
-     * - 3004 (aid_net_raw): required for raw socket / ping operations.
+     * Invariants:
+     * - Injects Android Network GIDs (3003 aid_inet, 3004 aid_net_raw) for Internet socket access.
+     * - Prepares /etc/sudoers.d/90-coder (NOPASSWD: ALL).
+     * - Configures PAM su, su-l, and sudo with pam_permit.so.
+     * - Unlocks root password in /etc/shadow for passwordless elevation.
+     * - Installs resilient /usr/local/bin/sudo with dual native-su + file-IPC fallback.
      */
     suspend fun ensureUser(root: String = UbuntuManager.INSTALL_DIR): Boolean = withContext(Dispatchers.IO) {
         try {
             val script = """
                 R="$root"
-                mkdir -p "${'$'}R/etc"
+                mkdir -p "${'$'}R/etc" "${'$'}R/etc/sudoers.d" "${'$'}R/etc/pam.d" "${'$'}R/usr/local/bin"
 
                 # 1. Android network groups & coder group in /etc/group
                 [ -f "${'$'}R/etc/group" ] || touch "${'$'}R/etc/group"
@@ -110,7 +127,7 @@ object SetupWizard {
                 grep -q '^aid_net_raw:' "${'$'}R/etc/group" 2>/dev/null || echo 'aid_net_raw:x:3004:coder' >> "${'$'}R/etc/group"
                 grep -q '^coder:' "${'$'}R/etc/group" 2>/dev/null || echo 'coder:x:1000:' >> "${'$'}R/etc/group"
 
-                # Add coder to sudo group if sudo exists
+                # Add coder to sudo group
                 if grep -q '^sudo:' "${'$'}R/etc/group" 2>/dev/null; then
                     if ! grep -E '^sudo:.*coder' "${'$'}R/etc/group" >/dev/null 2>&1; then
                         sed -i 's/^sudo:x:\([0-9]*\):.*/&,coder/;s/:,coder/:coder/' "${'$'}R/etc/group" 2>/dev/null || true
@@ -119,18 +136,17 @@ object SetupWizard {
                     echo 'sudo:x:27:coder' >> "${'$'}R/etc/group"
                 fi
 
-                # Passwordless sudo for coder user (sudoers.d config)
-                mkdir -p "${'$'}R/etc/sudoers.d"
+                # 2. Sudoers passwordless configuration
                 echo 'coder ALL=(ALL) NOPASSWD:ALL' > "${'$'}R/etc/sudoers.d/90-coder"
                 chmod 440 "${'$'}R/etc/sudoers.d/90-coder" 2>/dev/null || true
 
-                # Configure PAM su & sudo with pam_permit for passwordless elevation
-                mkdir -p "${'$'}R/etc/pam.d"
+                # 3. PAM su, su-l, and sudo permissive elevation (pam_permit.so)
                 printf "auth       sufficient pam_rootok.so\nauth       sufficient pam_permit.so\naccount    sufficient pam_permit.so\nsession    sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/su"
+                printf "auth       sufficient pam_rootok.so\nauth       sufficient pam_permit.so\naccount    sufficient pam_permit.so\nsession    sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/su-l"
                 printf "auth       sufficient pam_rootok.so\nauth       sufficient pam_permit.so\naccount    sufficient pam_permit.so\nsession    sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/sudo"
+                chmod 644 "${'$'}R/etc/pam.d/su" "${'$'}R/etc/pam.d/su-l" "${'$'}R/etc/pam.d/sudo" 2>/dev/null || true
 
-                # Configure /usr/local/bin/sudo: prefers native su (if suid works), with FIFO bridge fallback
-                mkdir -p "${'$'}R/usr/local/bin"
+                # 4. Universal Sudo Bridge with dual-path execution
                 cat > "${'$'}R/usr/local/bin/sudo" <<'SUDO_EOF'
 #!/bin/sh
 # DEVCODE Universal Sudo Bridge
@@ -138,31 +154,36 @@ if [ "${'$'}(id -u)" = "0" ]; then
     exec "${'$'}@"
 fi
 
-# 1. Native su execution (fastest and cleanest when suid is active)
-if /bin/su - root -c "true" 2>/dev/null; then
+# Path A: Direct native su execution (inherits terminal PTY cleanly)
+if /bin/su - root -c "true" 2>/dev/null || su - root -c "true" 2>/dev/null; then
     exec /bin/su - root -c "${'$'}*"
 fi
-if su - root -c "true" 2>/dev/null; then
-    exec su - root -c "${'$'}*"
-fi
 
-# 2. FIFO root daemon bridge fallback
-FIFO="/run/devcode/sudo.fifo"
-if [ -p "${'$'}FIFO" ]; then
+# Path B: Resilient file-based IPC bridge (non-blocking fallback)
+SUDO_DIR="/run/devcode/sudo"
+if [ -d "${'$'}SUDO_DIR" ]; then
     PID="${'$'}${'$'}"
-    RET="/run/devcode/sudo.ret.${'$'}PID"
-    OUT="/run/devcode/sudo.out.${'$'}PID"
-    rm -f "${'$'}RET" "${'$'}OUT" 2>/dev/null
-    mkfifo -m 666 "${'$'}OUT" 2>/dev/null || true
-    echo "${'$'}PID|${'$'}PWD|${'$'}*" > "${'$'}FIFO"
-    cat "${'$'}OUT" 2>/dev/null &
-    CAT_PID=${'$'}!
-    while [ ! -f "${'$'}RET" ]; do
+    REQ="${'$'}SUDO_DIR/req.${'$'}PID"
+    OUT="${'$'}SUDO_DIR/out.${'$'}PID"
+    RET="${'$'}SUDO_DIR/ret.${'$'}PID"
+    rm -f "${'$'}REQ" "${'$'}OUT" "${'$'}RET" 2>/dev/null
+    printf "%s\n" "${'$'}PWD|${'$'}*" > "${'$'}REQ.tmp"
+    mv -f "${'$'}REQ.tmp" "${'$'}REQ"
+    WAIT_COUNT=0
+    while [ ! -f "${'$'}RET" ] && [ "${'$'}WAIT_COUNT" -lt 1200 ]; do
+        if [ -f "${'$'}OUT" ]; then
+            cat "${'$'}OUT" 2>/dev/null
+            > "${'$'}OUT"
+        fi
         sleep 0.05 2>/dev/null || usleep 50000 2>/dev/null || sleep 1 2>/dev/null || true
+        WAIT_COUNT=${'$'}((WAIT_COUNT + 1))
     done
-    wait ${'$'}CAT_PID 2>/dev/null || true
+    if [ -f "${'$'}OUT" ]; then
+        cat "${'$'}OUT" 2>/dev/null
+        rm -f "${'$'}OUT" 2>/dev/null
+    fi
     CODE=${'$'}(cat "${'$'}RET" 2>/dev/null || echo 0)
-    rm -f "${'$'}RET" "${'$'}OUT" 2>/dev/null
+    rm -f "${'$'}REQ" "${'$'}RET" 2>/dev/null
     exit ${'$'}{CODE:-0}
 fi
 
@@ -171,7 +192,7 @@ exec /bin/su - root -c "${'$'}*"
 SUDO_EOF
                 chmod 755 "${'$'}R/usr/local/bin/sudo" 2>/dev/null || true
 
-                # Ensure essential apt and temporary directories exist with correct permissions
+                # 5. Ensure essential apt and temporary directories exist with correct permissions
                 mkdir -p "${'$'}R/var/lib/apt/lists/partial"
                 mkdir -p "${'$'}R/var/cache/apt/archives/partial"
                 mkdir -p "${'$'}R/var/log"
@@ -180,13 +201,13 @@ SUDO_EOF
                 chmod 755 "${'$'}R/var/lib/apt/lists" "${'$'}R/var/lib/apt/lists/partial" 2>/dev/null || true
                 chmod 755 "${'$'}R/var/cache/apt/archives/partial" 2>/dev/null || true
 
-                # 2. Primary 'coder' user in /etc/passwd (UID 1000, GID 1000)
+                # 6. Primary 'coder' user in /etc/passwd (UID 1000, GID 1000)
                 [ -f "${'$'}R/etc/passwd" ] || touch "${'$'}R/etc/passwd"
                 if ! grep -q '^coder:' "${'$'}R/etc/passwd" 2>/dev/null; then
                     echo 'coder:x:1000:1000:coder:/home/coder:/bin/bash' >> "${'$'}R/etc/passwd"
                 fi
 
-                # 3. Shadow record in /etc/shadow - root has blank password for seamless passwordless su
+                # 7. Unlock passwords in /etc/shadow for seamless elevation
                 if [ -f "${'$'}R/etc/shadow" ]; then
                     sed -i 's/^root:[^:]*:/root::/' "${'$'}R/etc/shadow" 2>/dev/null || true
                     if ! grep -q '^coder:' "${'$'}R/etc/shadow" 2>/dev/null; then
@@ -196,7 +217,7 @@ SUDO_EOF
                     fi
                 fi
 
-                # Ensure setuid bit on su binary inside rootfs
+                # 8. Ensure setuid bit on su binary inside rootfs
                 chmod 4755 "${'$'}R/bin/su" "${'$'}R/usr/bin/su" 2>/dev/null || true
 
                 # Verify coder is present in passwd
@@ -266,7 +287,7 @@ EOF
     }
 
     /**
-     * Installs optional dev packages with mounts held and policy-rc.d guard.
+     * Installs dev packages with mounts held, policy-rc.d guard, and automatic dpkg recovery.
      */
     suspend fun installPackages(
         packages: List<String>,
@@ -280,9 +301,11 @@ EOF
             return@withContext ChrootManager.withEnvironmentLock {
                 if (!ChrootManager.mountLocked()) {
                     log("Error: could not mount chroot filesystems")
+                    AppLogger.error("APT", "Could not mount chroot filesystems")
                     return@withEnvironmentLock false
                 }
                 try {
+                    AppLogger.log("APT", "Clearing stale package lock files...")
                     // 1. Clear any stale lock files from previous interrupted runs
                     RootManager.runAsRoot(
                         chrootCmd("rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock* 2>/dev/null || true"),
@@ -291,6 +314,7 @@ EOF
 
                     // 2. Auto-recovery: configure interrupted dpkg packages
                     log("Running dpkg auto-recovery (dpkg --configure -a)...")
+                    AppLogger.log("APT", "Running dpkg --configure -a")
                     val dpkgRecCmd = chrootCmd("DEBIAN_FRONTEND=noninteractive dpkg --configure -a")
                     val dpkgRecRes = RootManager.runAsRoot(dpkgRecCmd, APT_TIMEOUT_MS)
                     log("dpkg recovery exit=${dpkgRecRes.exitCode}")
@@ -301,6 +325,7 @@ EOF
 
                     // 4. Update package lists
                     log("Running apt-get update...")
+                    AppLogger.log("APT", "Running apt-get update")
                     val updateCmd = chrootCmd(
                         "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; " +
                             "DEBIAN_FRONTEND=noninteractive apt-get update"
@@ -308,24 +333,30 @@ EOF
                     val updateRes = RootManager.runAsRoot(updateCmd, APT_TIMEOUT_MS)
                     log("apt-get update exit=${updateRes.exitCode}")
                     if (!updateRes.isSuccess) {
-                        log("Error updating package lists: ${updateRes.stderr.ifBlank { updateRes.stdout }}")
+                        val errMsg = updateRes.stderr.ifBlank { updateRes.stdout }
+                        log("Error updating package lists: $errMsg")
+                        AppLogger.error("APT", "apt-get update failed: $errMsg")
                         return@withEnvironmentLock false
                     }
 
                     // 5. Install selected dev packages
                     val pkgList = packages.joinToString(" ")
                     log("Installing: $pkgList")
+                    AppLogger.log("APT", "Installing packages: $pkgList")
                     val installCmd = chrootCmd(
                         "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $pkgList; rc=${'$'}?; rm -f /usr/sbin/policy-rc.d; exit ${'$'}rc"
                     )
                     val installRes = RootManager.runAsRoot(installCmd, APT_TIMEOUT_MS)
                     log("apt-get install exit=${installRes.exitCode}")
                     if (!installRes.isSuccess) {
-                        log("Error installing packages: ${installRes.stderr.ifBlank { installRes.stdout }}")
+                        val errMsg = installRes.stderr.ifBlank { installRes.stdout }
+                        log("Error installing packages: $errMsg")
+                        AppLogger.error("APT", "apt-get install failed: $errMsg")
                         return@withEnvironmentLock false
                     }
                     ensureWorkspace()
-                    log("Package installation completed.")
+                    log("Package installation completed successfully.")
+                    AppLogger.log("APT", "Package installation completed successfully")
                     true
                 } finally {
                     ChrootManager.unmountLocked()
@@ -334,6 +365,7 @@ EOF
         } catch (e: Exception) {
             try {
                 log("Install exception: ${e.message}")
+                AppLogger.error("APT", "Install exception: ${e.message}")
             } catch (_: Exception) {}
             false
         }

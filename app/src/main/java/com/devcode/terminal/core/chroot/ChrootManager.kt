@@ -1,5 +1,6 @@
 package com.devcode.terminal.core.chroot
 
+import com.devcode.terminal.core.logging.AppLogger
 import com.devcode.terminal.core.root.RootManager
 import com.devcode.terminal.core.root.ShellResult
 import kotlinx.coroutines.Dispatchers
@@ -31,14 +32,13 @@ internal data class ActiveSession(
 /**
  * Ubuntu Chroot Engine Manager.
  *
- * Safety invariants:
- * - [lifecycleMutex] serialises all mount/unmount and destructive operations.
- * - Destructive operations (e.g. wipe / unmount-all for cleanup) are rejected
- *   while sessions are still running in the process registry.
- * - When stopping a session, child processes within the target process group / PID
- *   are killed to prevent orphaned background tasks inside the chroot.
- * - Virtual filesystem mounts check `/proc/mounts` first; `/dev/pts` is mounted
- *   without clobbering the host Android global devpts instance.
+ * Safety & Isolation Invariants:
+ * - Mount point is isolated via `mount --make-rprivate /` and `--make-rprivate $R`.
+ * - `$R/dev` is mounted as an independent isolated `tmpfs` so the Android host `/dev` is NEVER touched or modified!
+ * - Character nodes inside `$R/dev` (/dev/null, /dev/zero, /dev/tty, etc.) are created via `mknod -m 666` inside the tmpfs.
+ * - `/dev/pts` uses an isolated dedicated `newinstance` devpts mount with `gid=5,mode=620,ptmxmode=666`.
+ * - PTY allocation uses `/usr/bin/script` wrapping `/bin/su - coder` with safe logfile fallback.
+ * - Sudo execution operates via direct native `su` with permissive PAM and file-based background root daemon.
  */
 object ChrootManager {
 
@@ -62,7 +62,7 @@ object ChrootManager {
      */
     suspend fun isInstalled(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val result = RootManager.runAsRoot("test -x $UBUNTU_ROOT/bin/bash")
+            val result = RootManager.runAsRoot("test -x $UBUNTU_ROOT/bin/bash || test -x $UBUNTU_ROOT/usr/bin/bash")
             result.isSuccess
         } catch (_: Throwable) {
             false
@@ -83,7 +83,6 @@ object ChrootManager {
 
     /**
      * Returns true if there are registered active sessions whose processes are alive.
-     * Direct API exposed to avoid reflection from UbuntuManager / UI.
      */
     fun hasActiveSessions(): Boolean {
         pruneDeadSessions()
@@ -92,7 +91,6 @@ object ChrootManager {
 
     /**
      * Executes [block] while holding the lifecycle mutex.
-     * Used by UbuntuManager for atomic install/repair/remove operations.
      */
     suspend fun <T> withEnvironmentLock(block: suspend () -> T): T {
         return lifecycleMutex.withLock {
@@ -103,18 +101,13 @@ object ChrootManager {
     // ---- Mount lifecycle --------------------------------------------------
 
     /**
-     * Mounts chroot virtual filesystems for a specific target root (e.g. main UBUNTU_ROOT
-     * or a temporary extraction directory).
-     *
-     * Isolation invariants:
-     * - Mount point is isolated via `mount --make-rprivate /` and `--make-rprivate $R`.
-     * - `$R/dev` is mounted as an independent isolated `tmpfs` so the Android host `/dev` is NEVER touched or modified!
-     * - Character nodes inside `$R/dev` are bind-mounted individually or created inside the tmpfs.
-     * - `/dev/pts` uses an isolated dedicated `newinstance` devpts mount.
-     * - `$R/dev/ptmx` symlinks to `pts/ptmx` STRICTLY inside the chroot tmpfs.
+     * Mounts chroot virtual filesystems for a specific target root.
      */
     internal suspend fun mountTargetLocked(targetRoot: String = UBUNTU_ROOT): Boolean = withContext(Dispatchers.IO) {
         try {
+            AppLogger.log("MOUNT", "Mounting virtual filesystems for $targetRoot")
+            val chrootBin = getChrootExecutable()
+
             val mountScript = """
                 R="$targetRoot"
                 # 1. Private mount namespace hierarchy to prevent leak to host or other chroots
@@ -171,41 +164,37 @@ object ChrootManager {
                 # 8. Session runtime directory with universal write permission
                 mkdir -p "${'$'}R$SESSION_RUN_DIR"
                 chmod 777 "${'$'}R$SESSION_RUN_DIR" 2>/dev/null || true
-                mkdir -p "${'$'}R/run/devcode"
-                chmod 777 "${'$'}R/run/devcode" 2>/dev/null || true
+                mkdir -p "${'$'}R/run/devcode/sudo"
+                chmod 777 "${'$'}R/run/devcode/sudo" 2>/dev/null || true
 
-                # 9. Start persistent background root daemon inside chroot for universal sudo bridge
-                FIFO="${'$'}R/run/devcode/sudo.fifo"
-                rm -f "${'$'}FIFO" 2>/dev/null || true
-                mkfifo -m 666 "${'$'}FIFO" 2>/dev/null || true
-                chmod 666 "${'$'}FIFO" 2>/dev/null || true
-
-                # Launch daemon inside chroot with setsid so it survives subshell exits
-                setsid chroot "${'$'}R" /bin/sh -c '
-                    FIFO="/run/devcode/sudo.fifo"
-                    while [ -p "${'$'}FIFO" ]; do
-                        if read -r req < "${'$'}FIFO"; then
-                            [ -z "${'$'}req" ] && continue
-                            SPID=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f1)
-                            SDIR=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f2)
-                            SCMD=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f3-)
-                            (
-                                cd "${'$'}SDIR" 2>/dev/null || cd /root
-                                export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-                                export HOME=/root
-                                export USER=root
-                                export TERM=xterm-256color
-                                OUT="/run/devcode/sudo.out.${'$'}SPID"
-                                if [ -p "${'$'}OUT" ]; then
-                                    eval "${'$'}SCMD" > "${'$'}OUT" 2>&1
-                                else
-                                    eval "${'$'}SCMD"
+                # 9. Start persistent background root daemon inside chroot for sudo bridge
+                # Runs non-blocking file-based execution queue
+                (
+                    SUDO_DIR="${'$'}R/run/devcode/sudo"
+                    while true; do
+                        for req in "${'$'}SUDO_DIR"/req.*; do
+                            if [ -f "${'$'}req" ]; then
+                                SPID=${'$'}{req#"${'$'}SUDO_DIR"/req.}
+                                line=${'$'}(cat "${'$'}req" 2>/dev/null)
+                                rm -f "${'$'}req" 2>/dev/null
+                                if [ -n "${'$'}line" ]; then
+                                    SDIR=${'$'}(printf '%s\n' "${'$'}line" | cut -d"|" -f1)
+                                    SCMD=${'$'}(printf '%s\n' "${'$'}line" | cut -d"|" -f2-)
+                                    (
+                                        cd "${'$'}SDIR" 2>/dev/null || cd /root
+                                        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                                        export HOME=/root
+                                        export USER=root
+                                        export TERM=xterm-256color
+                                        eval "${'$'}SCMD" > "${'$'}SUDO_DIR/out.${'$'}SPID" 2>&1
+                                        echo "${'$'}?" > "${'$'}SUDO_DIR/ret.${'$'}SPID"
+                                    ) &
                                 fi
-                                echo "${'$'}?" > "/run/devcode/sudo.ret.${'$'}SPID"
-                            ) &
-                        fi
+                            fi
+                        done
+                        sleep 0.05 2>/dev/null || usleep 50000 2>/dev/null || sleep 1 2>/dev/null || true
                     done
-                ' </dev/null >/dev/null 2>&1 &
+                ) </dev/null >/dev/null 2>&1 &
 
                 # 10. Shared storage (/sdcard) - only mount for the primary installation
                 if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
@@ -220,15 +209,22 @@ object ChrootManager {
                     fi
                 fi
 
-                # 10. DNS resolver
+                # 11. DNS resolver
                 mkdir -p "${'$'}R/etc"
                 if [ -L "${'$'}R/etc/resolv.conf" ]; then rm -f "${'$'}R/etc/resolv.conf"; fi
                 printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}R/etc/resolv.conf"
             """.trimIndent()
 
             val result = RootManager.runAsRoot(mountScript)
-            result.isSuccess || isMounted(targetRoot)
-        } catch (_: Throwable) {
+            val success = result.isSuccess || isMounted(targetRoot)
+            if (success) {
+                AppLogger.log("MOUNT", "Virtual filesystems mounted successfully")
+            } else {
+                AppLogger.error("MOUNT", "Mounting failed: ${result.stderr.ifBlank { result.stdout }}")
+            }
+            success
+        } catch (e: Throwable) {
+            AppLogger.error("MOUNT", "Mount exception: ${e.message}")
             false
         }
     }
@@ -240,8 +236,10 @@ object ChrootManager {
     internal suspend fun unmountTargetLocked(targetRoot: String = UBUNTU_ROOT, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!force && targetRoot == UBUNTU_ROOT && hasActiveSessions()) {
+                AppLogger.log("UNMOUNT", "Unmount deferred: active sessions still running")
                 return@withContext false
             }
+            AppLogger.log("UNMOUNT", "Unmounting virtual filesystems for $targetRoot")
 
             val unmountScript = """
                 R="$targetRoot"
@@ -278,13 +276,16 @@ object ChrootManager {
                     [ -n "${'$'}p" ] && umount -l "${'$'}p" 2>/dev/null || true
                 done
 
-                # 6. Clean up sudo bridge FIFO and return files
-                rm -f "${'$'}R/run/devcode/sudo.fifo" "${'$'}R/run/devcode/sudo.ret."* 2>/dev/null || true
+                # 6. Clean up sudo bridge request and response files
+                rm -rf "${'$'}R/run/devcode/sudo" 2>/dev/null || true
             """.trimIndent()
 
             RootManager.runAsRoot(unmountScript)
-            !isMounted(targetRoot)
-        } catch (_: Throwable) {
+            val success = !isMounted(targetRoot)
+            AppLogger.log("UNMOUNT", "Unmount result: ${if (success) "Clean" else "Some mounts remained"}")
+            success
+        } catch (e: Throwable) {
+            AppLogger.error("UNMOUNT", "Unmount exception: ${e.message}")
             false
         }
     }
@@ -301,7 +302,6 @@ object ChrootManager {
 
     /**
      * Mounts proc, sysfs, dev, devpts, shared storage, and writes DNS configuration.
-     * Thread-safe and idempotent; protected by [lifecycleMutex].
      */
     suspend fun mountAll(): Boolean = lifecycleMutex.withLock {
         mountLocked()
@@ -309,7 +309,6 @@ object ChrootManager {
 
     /**
      * Lazily unmounts all mounted chroot partitions in reverse order.
-     * Rejects operation if active registered sessions are running, unless [force] is true.
      */
     suspend fun unmountAll(force: Boolean = false): Boolean = lifecycleMutex.withLock {
         unmountLocked(force)
@@ -360,6 +359,7 @@ object ChrootManager {
         val r = RootManager.runAsRoot(probeScript, 5_000L)
         val resolved = r.stdout.lines().firstOrNull { it.isNotBlank() }?.trim() ?: "chroot"
         resolvedChrootCmd = resolved
+        AppLogger.log("SYS", "Resolved chroot binary: $resolved")
         resolved
     }
 
@@ -367,7 +367,6 @@ object ChrootManager {
 
     /**
      * Starts a non-interactive one-shot session running [cmd] as user `coder`.
-     * Returns the created session ID.
      */
     suspend fun startSession(cmd: String): String = withContext(Dispatchers.IO) {
         val sessionId = UUID.randomUUID().toString()
@@ -393,8 +392,10 @@ object ChrootManager {
             )
 
             sessions[sessionId] = ActiveSession(info = info, process = process)
+            AppLogger.log("TERM", "One-shot session $sessionId started (PID: $pid)")
             sessionId
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLogger.error("TERM", "Failed to start one-shot session: ${e.message}")
             sessionId
         }
     }
@@ -403,20 +404,24 @@ object ChrootManager {
      * Spawns an interactive bash process inside the chroot under user `coder`
      * and registers it under [id].
      *
-     * Uses `/usr/bin/script` PTY wrapper when available to support interactive CLI,
-     * colors, and terminal applications.
+     * PTY Architecture:
+     * - Uses `/usr/bin/script` wrapping `/bin/su - coder` with safe logfile fallback.
+     * - Guarantees allocation of a real PTY slave (/dev/pts/X) owned by `coder:tty`.
+     * - Eliminates "cannot set terminal process group (-1)" and "no job control" errors.
      */
     suspend fun openInteractiveSession(id: String): Process? = lifecycleMutex.withLock {
         withContext(Dispatchers.IO) {
             try {
                 if (!mountLocked()) {
+                    AppLogger.error("TERM", "Cannot open session $id: mountLocked failed")
                     return@withContext null
                 }
                 val chrootBin = getChrootExecutable()
 
                 val markerFile = "$SESSION_RUN_DIR/$id.pid"
                 val termLog = "$SESSION_RUN_DIR/term-$id.log"
-                // Launch PTY session: use regular term log file if /dev/null cannot be opened by script
+                AppLogger.log("TERM", "Launching PTY terminal session $id...")
+
                 val fullCommand = """
                     $DEFAULT_ENV
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
@@ -426,7 +431,11 @@ object ChrootManager {
                     touch "$UBUNTU_ROOT$termLog" 2>/dev/null || true
                     chmod 666 "$UBUNTU_ROOT$termLog" 2>/dev/null || true
                     if [ -x "$UBUNTU_ROOT/usr/bin/script" ]; then
-                        $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; OUT_FILE='$termLog'; [ -w /dev/null ] && OUT_FILE='/dev/null'; exec /usr/bin/script -qefc 'exec /bin/bash -i' \"${'$'}OUT_FILE\""
+                        $chrootBin "$UBUNTU_ROOT" /bin/sh -c '
+                            OUT_LOG="$termLog"
+                            [ -w /dev/null ] && OUT_LOG="/dev/null"
+                            exec /usr/bin/script -qefc "/bin/su - coder -c '\''echo \$\$ > $markerFile; exec /bin/bash -i'\''" "${'$'}OUT_LOG"
+                        '
                     else
                         $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; exec /bin/bash -i"
                     fi
@@ -445,8 +454,10 @@ object ChrootManager {
                 )
 
                 sessions[id] = ActiveSession(info = info, process = process)
+                AppLogger.log("TERM", "Terminal session $id is live (PID: $pid)")
                 process
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                AppLogger.error("TERM", "Exception opening session $id: ${e.message}")
                 null
             }
         }
@@ -460,6 +471,7 @@ object ChrootManager {
             val active = sessions.remove(id) ?: return@withContext false
             val pid = active.info.pid
             val markerPath = "$UBUNTU_ROOT$SESSION_RUN_DIR/$id.pid"
+            AppLogger.log("TERM", "Stopping session $id (PID: $pid)...")
 
             val killScript = """
                 if [ -f "$markerPath" ]; then
@@ -666,11 +678,15 @@ DEVCODE_EOF
      */
     suspend fun stopAllCleanly(): String = withContext(Dispatchers.IO) {
         try {
+            AppLogger.log("STOP", "Stopping all DEVCODE sessions cleanly...")
             stopAll()
             unmountAll(force = true)
+            deployDevcodeCli()
             val r = RootManager.runAsRoot("/data/local/devcode/bin/devcode stop", 30_000L)
+            AppLogger.log("STOP", "All sessions stopped and unmounted")
             if (r.stdout.isNotBlank()) r.stdout else "All sessions stopped and unmounted cleanly."
         } catch (e: Exception) {
+            AppLogger.error("STOP", "Stop error: ${e.message}")
             "Stop error: ${e.message}"
         }
     }

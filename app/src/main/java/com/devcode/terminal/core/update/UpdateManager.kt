@@ -3,6 +3,7 @@ package com.devcode.terminal.core.update
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
+import com.devcode.terminal.core.logging.AppLogger
 import com.devcode.terminal.core.root.RootManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +132,7 @@ object UpdateManager {
             )
 
             if (buildNum > currentCode) {
+                AppLogger.log("UPDATE", "Update available: $name (Build $buildNum)")
                 _status.value = UpdaterStatus(
                     state = UpdateState.AVAILABLE,
                     updateInfo = info,
@@ -138,6 +140,7 @@ object UpdateManager {
                 )
                 info
             } else {
+                AppLogger.log("UPDATE", "DEVCODE is up to date (Build $currentCode)")
                 _status.value = UpdaterStatus(
                     state = UpdateState.UP_TO_DATE,
                     updateInfo = info,
@@ -146,6 +149,7 @@ object UpdateManager {
                 null
             }
         } catch (e: Exception) {
+            AppLogger.error("UPDATE", "Update check failed: ${e.message}")
             _status.value = UpdaterStatus(
                 state = UpdateState.ERROR,
                 message = "Update check failed: ${e.message}"
@@ -241,23 +245,28 @@ object UpdateManager {
 
             // Method 1: Seamless Root Install (1-Click Silent Install on Rooted Android)
             if (preferRootInstall) {
+                AppLogger.log("UPDATE", "Attempting 1-click silent install via pm install -r -d...")
                 val copyCmd = "cp '${updateFile.absolutePath}' /data/local/tmp/devcode-update.apk && chmod 644 /data/local/tmp/devcode-update.apk"
                 val cpResult = RootManager.runAsRoot(copyCmd, 15_000L)
                 if (cpResult.isSuccess) {
                     val pmCmd = "pm install -r -d /data/local/tmp/devcode-update.apk"
                     val pmResult = RootManager.runAsRoot(pmCmd, 60_000L)
                     if (pmResult.isSuccess && pmResult.stdout.contains("Success", ignoreCase = true)) {
+                        AppLogger.log("UPDATE", "Silent root install succeeded! App updated to Build ${info.buildNumber}")
                         _status.value = UpdaterStatus(
                             state = UpdateState.UP_TO_DATE,
                             message = "Update installed successfully via root!"
                         )
                         RootManager.runAsRoot("rm -f /data/local/tmp/devcode-update.apk", 5_000L)
                         return@withContext true
+                    } else {
+                        AppLogger.error("UPDATE", "pm install returned: ${pmResult.stderr.ifBlank { pmResult.stdout }}")
                     }
                 }
             }
 
             // Method 2: Standard Android PackageInstaller Intent via FileProvider
+            AppLogger.log("UPDATE", "Launching PackageInstaller Intent via FileProvider...")
             _status.value = _status.value.copy(message = "Launching package installer...")
             val apkUri = FileProvider.getUriForFile(
                 context,

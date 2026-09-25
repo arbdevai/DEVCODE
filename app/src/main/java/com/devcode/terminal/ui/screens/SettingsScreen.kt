@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
@@ -55,13 +57,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.devcode.terminal.DevCodeApp
 import com.devcode.terminal.core.chroot.ChrootManager
+import com.devcode.terminal.core.logging.AppLogger
 import com.devcode.terminal.core.terminal.TerminalManager
 import com.devcode.terminal.core.ubuntu.UbuntuManager
 import com.devcode.terminal.core.update.UpdateManager
@@ -75,7 +80,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val fontSize by DevCodeApp.settings.fontSize.collectAsState(initial = 14f)
     val savedToken by DevCodeApp.settings.githubToken.collectAsState(initial = "")
     val updaterStatus by UpdateManager.status.collectAsState()
+    val systemLogs by AppLogger.entries.collectAsState()
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val activity = context as? Activity
 
     var showExitDialog by remember { mutableStateOf(false) }
@@ -85,6 +92,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var statusOutput by remember { mutableStateOf("") }
     var customTokenInput by remember(savedToken) { mutableStateOf(savedToken) }
     var showTokenConfig by remember { mutableStateOf(false) }
+    var logsCopied by remember { mutableStateOf(false) }
 
     val currentVersionCode = UpdateManager.getAppVersionCode(context)
 
@@ -630,6 +638,150 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                         label = "Workspace Path",
                         value = ChrootManager.WORKSPACE,
                     )
+                }
+            }
+        }
+
+        // --- System Diagnostics & Complete Logs Card ---
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "SYSTEM DIAGNOSTICS & LOGS",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "${systemLogs.size} Events",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Complete runtime logs for mounts, PTY, bootstrap, and updater. Tap below to copy the full diagnostic bundle to clipboard for 1-tap troubleshooting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Primary 1-Tap Copy Button
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val report = AppLogger.generateDiagnosticReport(context)
+                                clipboard.setText(AnnotatedString(report))
+                                logsCopied = true
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (logsCopied) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = if (logsCopied) Icons.Default.CheckCircle else Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (logsCopied) "LOGS COPIED TO CLIPBOARD!" else "COPY FULL DIAGNOSTIC LOGS",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Secondary actions
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Live Log Stream",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        TextButton(
+                            onClick = {
+                                AppLogger.clear()
+                                logsCopied = false
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Clear", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Log output console box
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF070B0E))
+                            .padding(10.dp)
+                    ) {
+                        if (systemLogs.isEmpty()) {
+                            Text(
+                                text = "No log events captured yet.",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        } else {
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                items(systemLogs.size) { idx ->
+                                    val entry = systemLogs[idx]
+                                    Text(
+                                        text = "${entry.timestamp} [${entry.tag}] ${entry.message}",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        lineHeight = 14.sp,
+                                        color = when {
+                                            entry.isError -> Color(0xFFF43F5E)
+                                            entry.tag == "MOUNT" -> Color(0xFF38BDF8)
+                                            entry.tag == "TERM" -> Color(0xFF2DD4BF)
+                                            entry.tag == "BOOTSTRAP" -> Color(0xFF818CF8)
+                                            entry.tag == "APT" -> Color(0xFFFBBF24)
+                                            else -> Color(0xFF94A3B8)
+                                        },
+                                        modifier = Modifier.padding(vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
