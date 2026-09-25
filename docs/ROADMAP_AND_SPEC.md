@@ -151,9 +151,11 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 14. Hasil Rilis APK Terbaru (Build 32+ - ANSI Colors, OkHttp & Quick Commands)
-- **GitHub Release Tag**: `build-latest`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
+## 14. Hasil Rilis APK Terbaru (Build 34 - Production Powerhouse)
+- **GitHub Release Tag**: `build-34`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-34`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-34/app-debug.apk`
+- **Version**: VersionCode 34, VersionName `1.0.34`
 - **Changelog**:
   - ANSI Terminal Color Engine: Mengintegrasikan `AnsiParser.kt` yang mengonversi kode warna escape terminal (16 warna, 256 warna, bold, underline) menjadi Compose `AnnotatedString` sehingga output perintah seperti `ls --color`, `git status`, `sudo apt update`, traceback Python, dan tool developer tampil dengan pewarnaan sintaks yang hidup dan modern.
   - Quick Command Bar: Menambahkan baris tombol pintas perintah developer di atas keyboard terminal (`ls -la`, `pwd`, `git status`, `sudo apt update`, `ping 8.8.8.8`, `python3`, `node -v`, `top`).
