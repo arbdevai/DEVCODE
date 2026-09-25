@@ -183,25 +183,25 @@ object ChrootManager {
                 # Launch daemon inside chroot with setsid so it survives subshell exits
                 setsid chroot "${'$'}R" /bin/sh -c '
                     FIFO="/run/devcode/sudo.fifo"
-                    while [ -p "$FIFO" ]; do
-                        if read -r req < "$FIFO"; then
-                            [ -z "$req" ] && continue
-                            SPID=$(printf "%s\n" "$req" | cut -d"|" -f1)
-                            SDIR=$(printf "%s\n" "$req" | cut -d"|" -f2)
-                            SCMD=$(printf "%s\n" "$req" | cut -d"|" -f3-)
+                    while [ -p "${'$'}FIFO" ]; do
+                        if read -r req < "${'$'}FIFO"; then
+                            [ -z "${'$'}req" ] && continue
+                            SPID=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f1)
+                            SDIR=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f2)
+                            SCMD=${'$'}(printf "%s\n" "${'$'}req" | cut -d"|" -f3-)
                             (
-                                cd "$SDIR" 2>/dev/null || cd /root
+                                cd "${'$'}SDIR" 2>/dev/null || cd /root
                                 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
                                 export HOME=/root
                                 export USER=root
                                 export TERM=xterm-256color
-                                OUT="/run/devcode/sudo.out.$SPID"
-                                if [ -p "$OUT" ]; then
-                                    eval "$SCMD" > "$OUT" 2>&1
+                                OUT="/run/devcode/sudo.out.${'$'}SPID"
+                                if [ -p "${'$'}OUT" ]; then
+                                    eval "${'$'}SCMD" > "${'$'}OUT" 2>&1
                                 else
-                                    eval "$SCMD"
+                                    eval "${'$'}SCMD"
                                 fi
-                                echo "$?" > "/run/devcode/sudo.ret.$SPID"
+                                echo "${'$'}?" > "/run/devcode/sudo.ret.${'$'}SPID"
                             ) &
                         fi
                     done
