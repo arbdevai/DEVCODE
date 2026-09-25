@@ -133,27 +133,27 @@ object SetupWizard {
                 cat > "${'$'}R/usr/local/bin/sudo" <<'SUDO_EOF'
 #!/bin/sh
 # DEVCODE Universal Sudo Bridge
-if [ "$(id -u)" = "0" ]; then
-    exec "$@"
+if [ "${'$'}(id -u)" = "0" ]; then
+    exec "${'$'}@"
 fi
 
 FIFO="/run/devcode/sudo.fifo"
-if [ -p "$FIFO" ]; then
-    TTY="$(tty 2>/dev/null || echo '/dev/tty')"
-    PID="$$"
-    RET="/run/devcode/sudo.ret.$PID"
-    rm -f "$RET" 2>/dev/null
-    echo "$PID|$TTY|$PWD|$*" > "$FIFO"
-    while [ ! -f "$RET" ]; do
+if [ -p "${'$'}FIFO" ]; then
+    TTY="${'$'}(tty 2>/dev/null || echo '/dev/tty')"
+    PID="${'$'}${'$'}"
+    RET="/run/devcode/sudo.ret.${'$'}PID"
+    rm -f "${'$'}RET" 2>/dev/null
+    echo "${'$'}PID|${'$'}TTY|${'$'}PWD|${'$'}*" > "${'$'}FIFO"
+    while [ ! -f "${'$'}RET" ]; do
         sleep 0.05 2>/dev/null || usleep 50000 2>/dev/null || sleep 1 2>/dev/null || true
     done
-    CODE=$(cat "$RET" 2>/dev/null || echo 0)
-    rm -f "$RET" 2>/dev/null
-    exit ${CODE:-0}
+    CODE=${'$'}(cat "${'$'}RET" 2>/dev/null || echo 0)
+    rm -f "${'$'}RET" 2>/dev/null
+    exit ${'$'}{CODE:-0}
 fi
 
 # Fallback: exec su directly
-exec /bin/su - root -c "$*"
+exec /bin/su - root -c "${'$'}*"
 SUDO_EOF
                 chmod 755 "${'$'}R/usr/local/bin/sudo" 2>/dev/null || true
 
