@@ -148,3 +148,17 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 ### D. Fitur Notifikasi Dinamis & Tombol "EXIT & KILL ALL" di Status Bar
 - `WorkspaceService` kini menampilkan notifikasi dinamis yang mengabarkan status sesi terminal yang sedang aktif secara real-time.
 - Ditambahkan tombol aksi **[EXIT & KILL ALL]** langsung di laci notifikasi Android, sehingga pengguna dapat menghentikan seluruh sesi Linux dan unmount filesystem dengan 1 sentuhan tanpa harus membuka aplikasi.
+
+---
+
+## 11. Hasil Rilis APK Terbaru (Build 26)
+- **GitHub Release Tag**: `build-26`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-26`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-26/app-debug.apk`
+- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
+- **Version**: VersionCode 26, VersionName `1.0.26`
+- **Changelog**:
+  - Dpkg auto-recovery: pembersihan stale lock files, otomatis `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi paket.
+  - Universal Sudo Bridge: didukung root daemon FIFO (`/run/devcode/sudo.fifo`) dan konfigurasi PAM permit, menjamin `sudo apt update` dan `sudo apt install` berjalan mulus sebagai root tanpa password.
+  - PTY allocation fix: menjalankan `script` sebagai user `coder` sehingga PTY slave dimiliki oleh `coder:tty`, menghilangkan error `cannot set terminal process group (-1)`.
+  - Notifikasi status bar dinamis menampilkan jumlah & nama sesi aktif, dilengkapi tombol aksi 1-sentuh **[EXIT & KILL ALL]** langsung di laci notifikasi Android.
