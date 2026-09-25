@@ -3,7 +3,6 @@ package com.devcode.terminal.ui.components
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import java.util.regex.Pattern
@@ -43,7 +42,7 @@ object AnsiParser {
         }
 
         val matcher = SGR_PATTERN.matcher(rawText)
-        val sb = buildAnnotatedString()
+        val builder = AnnotatedString.Builder()
         var lastEnd = 0
 
         var currentFgColor: Color? = null
@@ -63,9 +62,9 @@ object AnsiParser {
             if (textSegment.isNotEmpty()) {
                 val cleanText = STRIP_PATTERN.matcher(textSegment).replaceAll("")
                 if (cleanText.isNotEmpty()) {
-                    val start = sb.length
-                    sb.append(cleanText)
-                    sb.addStyle(currentStyle(), start, sb.length)
+                    val start = builder.length
+                    builder.append(cleanText)
+                    builder.addStyle(currentStyle(), start, builder.length)
                 }
             }
 
@@ -106,13 +105,13 @@ object AnsiParser {
         if (lastEnd < rawText.length) {
             val trailingText = STRIP_PATTERN.matcher(rawText.substring(lastEnd)).replaceAll("")
             if (trailingText.isNotEmpty()) {
-                val start = sb.length
-                sb.append(trailingText)
-                sb.addStyle(currentStyle(), start, sb.length)
+                val start = builder.length
+                builder.append(trailingText)
+                builder.addStyle(currentStyle(), start, builder.length)
             }
         }
 
-        return sb
+        return builder.toAnnotatedString()
     }
 
     private fun getStandardColor(index: Int, bright: Boolean): Color {
