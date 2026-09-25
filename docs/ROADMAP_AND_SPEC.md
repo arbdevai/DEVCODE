@@ -151,9 +151,11 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 13. Hasil Rilis APK Terbaru (Production-Ready Architecture)
-- **GitHub Release Tag**: `build-latest`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
+## 13. Hasil Rilis APK Terbaru (Build 31 - Production Architecture)
+- **GitHub Release Tag**: `build-31`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-31`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-31/app-debug.apk`
+- **Version**: VersionCode 31, VersionName `1.0.31`
 - **Changelog**:
   - Fitur System Diagnostics & 1-Tap Copy Logs: Ditambahkan `AppLogger` yang mengumpulkan log sistem, mount, PTY, sudo, dan updater lengkap dengan tombol salin laporan diagnostik di menu Settings untuk mempermudah debugging tanpa perlu keahlian teknis.
   - Sudo Bridge Multi-Fallback: Mengeksekusi su native secara langsung dengan hak akses pam_permit dan passwordless elevation di `/etc/pam.d/su`, `/etc/pam.d/su-l`, `/etc/pam.d/sudo`, dan `/etc/shadow`, didukung fallback non-blocking file-based IPC queue di `/run/devcode/sudo` yang tidak akan pernah mengalami hang atau deadlock.
