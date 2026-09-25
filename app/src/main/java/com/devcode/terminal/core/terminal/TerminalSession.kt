@@ -246,6 +246,11 @@ class TerminalSession(
 
     // ---- system messages --------------------------------------------------
 
+    /** Clear all transcript text from the console view. */
+    fun clearTranscript() {
+        output.value = ""
+    }
+
     /** Append an informational (non-command) line to the transcript. */
     fun appendSystem(text: String) {
         appendOutput(text)

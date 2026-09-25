@@ -151,14 +151,14 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 13. Hasil Rilis APK Terbaru (Build 31 - Production Architecture)
-- **GitHub Release Tag**: `build-31`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-31`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-31/app-debug.apk`
-- **Version**: VersionCode 31, VersionName `1.0.31`
+## 14. Hasil Rilis APK Terbaru (Build 32+ - ANSI Colors, OkHttp & Quick Commands)
+- **GitHub Release Tag**: `build-latest`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
 - **Changelog**:
-  - Fitur System Diagnostics & 1-Tap Copy Logs: Ditambahkan `AppLogger` yang mengumpulkan log sistem, mount, PTY, sudo, dan updater lengkap dengan tombol salin laporan diagnostik di menu Settings untuk mempermudah debugging tanpa perlu keahlian teknis.
-  - Sudo Bridge Multi-Fallback: Mengeksekusi su native secara langsung dengan hak akses pam_permit dan passwordless elevation di `/etc/pam.d/su`, `/etc/pam.d/su-l`, `/etc/pam.d/sudo`, dan `/etc/shadow`, didukung fallback non-blocking file-based IPC queue di `/run/devcode/sudo` yang tidak akan pernah mengalami hang atau deadlock.
-  - PTY Allocation Bulletproof: Logfile PTY diarahkan ke `$SESSION_RUN_DIR/term-$id.log` atau `/tmp` sehingga `/usr/bin/script` tidak pernah gagal membuka file output, memastikan PTY slave selalu dialokasikan dan bebas dari error process group.
-  - Dpkg Auto-Recovery & Networking: Pembersihan lock otomatis, auto-recovery `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi, serta penambahan paket `iputils-ping` dan `net-tools` secara default.
-  - Status Bar Controller: Notifikasi dinamis memantau sesi aktif dengan tombol 1-sentuh **[EXIT & KILL ALL]** untuk menghentikan seluruh proses Linux dan unmount filesystem seketika dari laci notifikasi Android.
+  - ANSI Terminal Color Engine: Mengintegrasikan `AnsiParser.kt` yang mengonversi kode warna escape terminal (16 warna, 256 warna, bold, underline) menjadi Compose `AnnotatedString` sehingga output perintah seperti `ls --color`, `git status`, `sudo apt update`, traceback Python, dan tool developer tampil dengan pewarnaan sintaks yang hidup dan modern.
+  - Quick Command Bar: Menambahkan baris tombol pintas perintah developer di atas keyboard terminal (`ls -la`, `pwd`, `git status`, `sudo apt update`, `ping 8.8.8.8`, `python3`, `node -v`, `top`).
+  - Fitur Clear Console: Tombol pembersihan riwayat tampilan konsol terminal (`clearTranscript()`).
+  - Upgrade Networking: Menambahkan OkHttp 4.12.0 untuk konektivitas HTTP/2 yang andal dan transfer data berkecepatan tinggi.
+  - Sudo Bridge & PTY Bulletproof: Native su dengan PAM permit, fallback logfile `/tmp` anti-permission denied, serta auto-recovery dpkg --configure -a.
+  - Notifikasi Status Bar Dinamis dengan tombol aksi 1-sentuh **[EXIT & KILL ALL]**.
+  - System Diagnostics & 1-Tap Copy Full Logs di menu Settings.

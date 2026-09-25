@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
@@ -43,6 +44,7 @@ import com.devcode.terminal.core.chroot.ChrootManager
 import com.devcode.terminal.core.terminal.TerminalManager
 import com.devcode.terminal.core.terminal.TerminalSession
 import com.devcode.terminal.service.WorkspaceService
+import com.devcode.terminal.ui.components.AnsiParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -396,6 +398,21 @@ private fun SessionConsole(session: TerminalSession, fontSize: Float, modifier: 
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
+
+            Spacer(Modifier.width(4.dp))
+
+            TextButton(
+                enabled = output.isNotEmpty(),
+                onClick = { session.clearTranscript() },
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Icon(Icons.Default.ClearAll, null, Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Clear",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
 
         // Terminal Screen Output Container
@@ -416,8 +433,9 @@ private fun SessionConsole(session: TerminalSession, fontSize: Float, modifier: 
                     contentPadding = PaddingValues(bottom = 8.dp),
                 ) {
                     items(lines.size) { index ->
+                        val parsed = remember(lines[index]) { AnsiParser.parse(lines[index]) }
                         Text(
-                            text = if (output.isEmpty()) "$ coder@ubuntu:~$ " else lines[index],
+                            text = if (output.isEmpty()) AnnotatedString("$ coder@ubuntu:~$ ") else parsed,
                             fontFamily = FontFamily.Monospace,
                             fontSize = fontSize.sp,
                             lineHeight = (fontSize * 1.35f).sp,
@@ -435,6 +453,26 @@ private fun SessionConsole(session: TerminalSession, fontSize: Float, modifier: 
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.padding(vertical = 2.dp),
             )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // --- Quick Command Suggestions Bar ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            QuickChip("ls -la") { command = "ls -la"; send() }
+            QuickChip("pwd") { command = "pwd"; send() }
+            QuickChip("git status") { command = "git status"; send() }
+            QuickChip("sudo apt update") { command = "sudo apt update"; send() }
+            QuickChip("ping 8.8.8.8") { command = "ping -c 3 8.8.8.8"; send() }
+            QuickChip("python3") { command = "python3 --version"; send() }
+            QuickChip("node -v") { command = "node -v"; send() }
+            QuickChip("top") { command = "top -n 1"; send() }
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -572,5 +610,33 @@ private fun AccessoryKey(
                 fontSize = 11.sp
             )
         )
+    }
+}
+
+@Composable
+private fun QuickChip(
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        contentColor = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.height(24.dp)
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 10.sp
+                )
+            )
+        }
     }
 }
