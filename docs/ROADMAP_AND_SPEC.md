@@ -126,16 +126,15 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 8. Hasil Rilis APK Terbaru (Build 19)
-- **GitHub Release Tag**: `build-19`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-19`
-- **Asset Download**: `https://github.com/arbdevai/DEVCODE/releases/download/build-19/app-debug.apk`
+## 9. Hasil Rilis APK Terbaru (Build 21 - Final Production)
+- **GitHub Release Tag**: `build-21`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-21`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-21/app-debug.apk`
 - **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 19, VersionName `1.0.19`
+- **Version**: VersionCode 21, VersionName `1.0.21`
 - **Changelog**:
-  - Total isolasi `/dev` via dedicated `tmpfs` mandiri (tidak merusak host `/dev/ptmx`, Termux aman 100%).
-  - PATH environment Ubuntu (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) di-export otomatis di semua eksekusi chroot, mengatasi `apt-get` exit=127.
-  - Sudo bridge `/usr/local/bin/sudo` + PAM wheel trust memungkinkan `sudo apt update` dan `sudo apt install` tanpa password.
-  - CLI manager `/data/local/devcode/bin/devcode` (stop, status, uninstall) dan integrasi di UI.
-  - Fitur In-App Check Update & Auto-Install APK langsung di dalam aplikasi.
-  - Live Step-by-Step Logging di layar Ubuntu Hub.
+  - Node perangkat `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/tty` dibuat menggunakan `mknod -m 666` di dalam chroot `tmpfs`, mengatasi error `bash: /dev/null: Permission denied` dan `apt-key: cannot create /dev/null`.
+  - Opsi mount devpts disempurnakan dengan `gid=5,mode=620,ptmxmode=666` untuk alokasi PTY Linux standar, mengatasi error `cannot set terminal process group (-1)`.
+  - Perbaikan total alur Exit & Kill All Sessions: menggunakan `stopService` biasa (menghilangkan crash ANR ForegroundService), pembersihan sesi & unmount tuntas, serta terminasi proses Linux bersih (`Process.killProcess`).
+  - Fitur In-App Update disesuaikan untuk unduhan publik tanpa perlu token otentikasi.
+  - Ditambahkan **Changelog Viewer Dialog** interaktif di Dashboard dan Settings agar pengguna bisa membaca rilis notes sebelum memasang update.
