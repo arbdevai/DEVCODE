@@ -151,11 +151,15 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 12. Hasil Rilis APK Terbaru (Build 27+ - Final Stabilization)
-- **GitHub Release Tag**: `build-latest`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/latest/download/app-debug.apk`
+## 12. Hasil Rilis APK Terbaru (Build 29 - Full Sudo Bridge & Terminal Fix)
+- **GitHub Release Tag**: `build-29`
+- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-29`
+- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-29/app-debug.apk`
+- **Version**: VersionCode 29, VersionName `1.0.29`
 - **Changelog**:
-  - Perbaikan tuntas Sudo Bridge: didukung root daemon FIFO yang meneruskan stdout/stderr secara real-time via named pipe (`sudo.out.$PID`) sehingga `sudo sh -c 'id > /tmp/root-test.txt'` dan `sudo apt update` berfungsi penuh dengan output langsung.
+  - Perbaikan tuntas Sudo Bridge: didukung root daemon FIFO yang meneruskan stdout/stderr secara real-time via named pipe (`sudo.out.$PID`) sehingga `sudo sh -c 'id > /tmp/root-test.txt'` dan `sudo apt update` berfungsi penuh dengan output langsung di terminal.
   - Penambahan paket default jaringan: `iputils-ping` dan `net-tools` pada toolchain development.
   - Perbaikan PTY allocation: PTY logfile diarahkan ke file reguler di `$SESSION_RUN_DIR/term-$id.log` saat `/dev/null` ditolak oleh `script`, memastikan PTY slave selalu teralokasi sempurna tanpa error process group.
   - Pengaktifan opsi `dev,rw` pada `mount -t tmpfs -o mode=755,dev,rw dev "$R/dev"` agar character devices dapat dibuka oleh seluruh user.
+  - Pembersihan otomatis stale lock files, eksekusi otomatis `dpkg --configure -a` dan `apt-get install -f -y` sebelum instalasi paket.
+  - Notifikasi status bar dinamis menampilkan status sesi aktif, dilengkapi tombol 1-sentuh **[EXIT & KILL ALL]** langsung di laci notifikasi Android.
