@@ -9,9 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import com.devcode.terminal.core.chroot.ChrootManager
 import androidx.core.app.NotificationCompat
 import com.devcode.terminal.MainActivity
+import com.devcode.terminal.core.chroot.ChrootManager
+import com.devcode.terminal.core.terminal.TerminalManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,6 +22,9 @@ import kotlinx.coroutines.launch
 /**
  * Foreground service that keeps terminal sessions and Ubuntu chroot processes
  * alive when the user switches apps or turns off the screen.
+ *
+ * Provides a dynamic statusbar notification showing running sessions and a 1-tap
+ * "EXIT & KILL ALL" action directly from the Android notification drawer.
  */
 class WorkspaceService : Service() {
 
@@ -58,17 +62,52 @@ class WorkspaceService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
+        // Dynamically update notification text based on active terminal sessions
+        serviceScope.launch {
+            TerminalManager.sessions.collect { sessions ->
+                val text = if (sessions.isNotEmpty()) {
+                    val titles = sessions.take(2).joinToString(", ") { it.title }
+                    val suffix = if (sessions.size > 2) " (+${sessions.size - 2})" else ""
+                    "${sessions.size} session(s) active: $titles$suffix"
+                } else {
+                    "Ubuntu 24.04 ARM64 Idle • Ready"
+                }
+                val notification = buildNotification(text)
+                val manager = getSystemService(NotificationManager::class.java)
+                manager?.notify(NOTIFICATION_ID, notification)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP || intent?.action == ACTION_KILL_ALL) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_KILL_ALL -> {
+                serviceScope.launch {
+                    try {
+                        TerminalManager.sessions.value.toList().forEach { session ->
+                            try {
+                                session.stop()
+                                TerminalManager.closeSession(session.id)
+                            } catch (_: Throwable) {}
+                        }
+                        ChrootManager.stopAllCleanly()
+                    } catch (_: Throwable) {}
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_STOP -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
 
-        val notification = buildNotification("DEVCODE Linux session active")
-        startForeground(NOTIFICATION_ID, notification)
+        val initialNotif = buildNotification("DEVCODE Workstation active")
+        startForeground(NOTIFICATION_ID, initialNotif)
         return START_STICKY
     }
 
@@ -78,18 +117,15 @@ class WorkspaceService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // When app task is swiped away from recent apps, KEEP the background service alive
-        // as requested by user ("kalau cuma close apk tetap berjalan normal").
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
-            // Trim dead sessions under memory pressure
             serviceScope.launch {
                 try {
-                    ChrootManager.listSessions() // internally prunes dead processes
+                    ChrootManager.listSessions()
                 } catch (_: Throwable) {}
             }
         }
@@ -104,7 +140,8 @@ class WorkspaceService : Service() {
                 "DEVCODE Workspace",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Linux workspace session notifications"
+                description = "Linux workspace session notifications and controls"
+                setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
@@ -112,10 +149,21 @@ class WorkspaceService : Service() {
     }
 
     private fun buildNotification(text: String): Notification {
-        val pendingIntent = PendingIntent.getActivity(
+        val openIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val killIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, WorkspaceService::class.java).apply {
+                action = ACTION_KILL_ALL
+            },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
@@ -123,8 +171,14 @@ class WorkspaceService : Service() {
             .setContentTitle("DEVCODE Workstation")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openIntent)
             .setOngoing(true)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "EXIT & KILL ALL",
+                killIntent
+            )
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 }

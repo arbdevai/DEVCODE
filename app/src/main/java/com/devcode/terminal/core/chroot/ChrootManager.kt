@@ -165,8 +165,37 @@ object ChrootManager {
                 # 8. Session runtime directory with universal write permission
                 mkdir -p "${'$'}R$SESSION_RUN_DIR"
                 chmod 777 "${'$'}R$SESSION_RUN_DIR" 2>/dev/null || true
+                mkdir -p "${'$'}R/run/devcode"
+                chmod 777 "${'$'}R/run/devcode" 2>/dev/null || true
 
-                # 9. Shared storage (/sdcard) - only mount for the primary installation
+                # 9. Start root execution daemon for universal sudo bridge (works on nosuid /data)
+                FIFO="${'$'}R/run/devcode/sudo.fifo"
+                rm -f "${'$'}FIFO" 2>/dev/null || true
+                mkfifo -m 666 "${'$'}FIFO" 2>/dev/null || true
+                chmod 666 "${'$'}FIFO" 2>/dev/null || true
+
+                (
+                    while [ -p "${'$'}FIFO" ]; do
+                        if read -r req < "${'$'}FIFO"; then
+                            [ -z "${'$'}req" ] && continue
+                            SPID=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f1)
+                            STTY=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f2)
+                            SDIR=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f3)
+                            SCMD=${'$'}(printf '%s\n' "${'$'}req" | cut -d"|" -f4-)
+                            (
+                                cd "${'$'}SDIR" 2>/dev/null || true
+                                export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                                export HOME=/root
+                                export USER=root
+                                export TERM=xterm-256color
+                                eval "${'$'}SCMD"
+                                echo "${'$'}?" > "${'$'}R/run/devcode/sudo.ret.${'$'}SPID" 2>/dev/null
+                            ) < "${'$'}STTY" > "${'$'}STTY" 2>&1 &
+                        fi
+                    done
+                ) 2>/dev/null &
+
+                # 10. Shared storage (/sdcard) - only mount for the primary installation
                 if [ "${'$'}R" = "$UBUNTU_ROOT" ]; then
                     if [ -d /sdcard ]; then
                         mkdir -p "${'$'}R/sdcard"
@@ -236,6 +265,9 @@ object ChrootManager {
                 awk -v r="${'$'}R/" '${'$'}2 ~ "^"r {print ${'$'}2}' /proc/mounts 2>/dev/null | sort -r | while read -r p; do
                     [ -n "${'$'}p" ] && umount -l "${'$'}p" 2>/dev/null || true
                 done
+
+                # 6. Clean up sudo bridge FIFO and return files
+                rm -f "${'$'}R/run/devcode/sudo.fifo" "${'$'}R/run/devcode/sudo.ret."* 2>/dev/null || true
             """.trimIndent()
 
             RootManager.runAsRoot(unmountScript)
@@ -371,18 +403,18 @@ object ChrootManager {
                 val chrootBin = getChrootExecutable()
 
                 val markerFile = "$SESSION_RUN_DIR/$id.pid"
-                // Interactive command with PTY wrapper support via script -qefc
+                // Run script as coder user so the allocated PTY slave is owned by coder (avoiding EPERM in tcsetpgrp)
                 val fullCommand = """
                     $DEFAULT_ENV
-                    chmod 666 "$UBUNTU_ROOT/dev/null" 2>/dev/null || true
+                    chmod 666 "$UBUNTU_ROOT/dev/null" "$UBUNTU_ROOT/dev/zero" "$UBUNTU_ROOT/dev/tty" 2>/dev/null || true
                     mkdir -p "$UBUNTU_ROOT$SESSION_RUN_DIR"
                     chmod 777 "$UBUNTU_ROOT$SESSION_RUN_DIR" 2>/dev/null || true
                     touch "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
                     chmod 666 "$UBUNTU_ROOT$markerFile" 2>/dev/null || true
                     if [ -x "$UBUNTU_ROOT/usr/bin/script" ]; then
-                        $chrootBin "$UBUNTU_ROOT" /usr/bin/script -qefc "/bin/su - coder -c 'echo \$\$ > $markerFile; exec /bin/bash -i'" /dev/null
+                        $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; exec /usr/bin/script -qefc 'exec /bin/bash -i' /dev/null"
                     else
-                        $chrootBin "$UBUNTU_ROOT" /bin/sh -c "/bin/su - coder -c 'echo \$\$ > $markerFile; exec setsid /bin/bash -i'"
+                        $chrootBin "$UBUNTU_ROOT" /bin/su - coder -c "echo \$\$ > '$markerFile'; exec /bin/bash -i"
                     fi
                 """.trimIndent()
 

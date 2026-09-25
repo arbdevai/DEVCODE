@@ -122,22 +122,37 @@ object SetupWizard {
                 echo 'coder ALL=(ALL) NOPASSWD:ALL' > "${'$'}R/etc/sudoers.d/90-coder"
                 chmod 440 "${'$'}R/etc/sudoers.d/90-coder" 2>/dev/null || true
 
-                # Configure PAM su to allow members of sudo group without password
-                if [ -f "${'$'}R/etc/pam.d/su" ]; then
-                    if ! grep -q 'pam_wheel.so trust group=sudo' "${'$'}R/etc/pam.d/su" 2>/dev/null; then
-                        sed -i '1s/^/auth sufficient pam_wheel.so trust group=sudo\n/' "${'$'}R/etc/pam.d/su" 2>/dev/null || true
-                    fi
-                fi
+                # Configure PAM su & sudo with pam_permit for passwordless elevation
+                mkdir -p "${'$'}R/etc/pam.d"
+                printf "auth sufficient pam_permit.so\naccount sufficient pam_permit.so\nsession sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/su"
+                printf "auth sufficient pam_permit.so\naccount sufficient pam_permit.so\nsession sufficient pam_permit.so\n" > "${'$'}R/etc/pam.d/sudo"
 
-                # Install drop-in sudo bridge script in /usr/local/bin/sudo
-                # Allows 'sudo apt update' to work seamlessly even before sudo package is installed
+                # Install robust sudo bridge in /usr/local/bin/sudo
+                # Connects to the DEVCODE background root bridge FIFO, bypassing Android nosuid limitations
                 mkdir -p "${'$'}R/usr/local/bin"
                 cat > "${'$'}R/usr/local/bin/sudo" <<'SUDO_EOF'
 #!/bin/sh
-# DEVCODE Sudo Bridge for coder user
+# DEVCODE Universal Sudo Bridge
 if [ "$(id -u)" = "0" ]; then
     exec "$@"
 fi
+
+FIFO="/run/devcode/sudo.fifo"
+if [ -p "$FIFO" ]; then
+    TTY="$(tty 2>/dev/null || echo '/dev/tty')"
+    PID="$$"
+    RET="/run/devcode/sudo.ret.$PID"
+    rm -f "$RET" 2>/dev/null
+    echo "$PID|$TTY|$PWD|$*" > "$FIFO"
+    while [ ! -f "$RET" ]; do
+        sleep 0.05 2>/dev/null || usleep 50000 2>/dev/null || sleep 1 2>/dev/null || true
+    done
+    CODE=$(cat "$RET" 2>/dev/null || echo 0)
+    rm -f "$RET" 2>/dev/null
+    exit ${CODE:-0}
+fi
+
+# Fallback: exec su directly
 exec /bin/su - root -c "$*"
 SUDO_EOF
                 chmod 755 "${'$'}R/usr/local/bin/sudo" 2>/dev/null || true
@@ -248,6 +263,23 @@ EOF
                     return@withEnvironmentLock false
                 }
                 try {
+                    // 1. Clear any stale lock files from previous interrupted runs
+                    RootManager.runAsRoot(
+                        chrootCmd("rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock* 2>/dev/null || true"),
+                        ROOT_TIMEOUT_MS
+                    )
+
+                    // 2. Auto-recovery: configure interrupted dpkg packages
+                    log("Running dpkg auto-recovery (dpkg --configure -a)...")
+                    val dpkgRecCmd = chrootCmd("DEBIAN_FRONTEND=noninteractive dpkg --configure -a")
+                    val dpkgRecRes = RootManager.runAsRoot(dpkgRecCmd, APT_TIMEOUT_MS)
+                    log("dpkg recovery exit=${dpkgRecRes.exitCode}")
+
+                    // 3. Fix broken package dependencies if any
+                    val fixCmd = chrootCmd("DEBIAN_FRONTEND=noninteractive apt-get install -f -y")
+                    RootManager.runAsRoot(fixCmd, APT_TIMEOUT_MS)
+
+                    // 4. Update package lists
                     log("Running apt-get update...")
                     val updateCmd = chrootCmd(
                         "printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; " +
@@ -260,6 +292,7 @@ EOF
                         return@withEnvironmentLock false
                     }
 
+                    // 5. Install selected dev packages
                     val pkgList = packages.joinToString(" ")
                     log("Installing: $pkgList")
                     val installCmd = chrootCmd(

@@ -126,15 +126,25 @@ Chroot hanya digunakan saat membuka sesi terminal atau menjalankan `apt-get`. De
 
 ---
 
-## 9. Hasil Rilis APK Terbaru (Build 21 - Final Production)
-- **GitHub Release Tag**: `build-21`
-- **Release Page**: `https://github.com/arbdevai/DEVCODE/releases/tag/build-21`
-- **Asset Download (Public)**: `https://github.com/arbdevai/DEVCODE/releases/download/build-21/app-debug.apk`
-- **Keystore**: PKCS12 deterministic CI release key (Signature v1 + v2 + v3 aktif)
-- **Version**: VersionCode 21, VersionName `1.0.21`
-- **Changelog**:
-  - Node perangkat `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/tty` dibuat menggunakan `mknod -m 666` di dalam chroot `tmpfs`, mengatasi error `bash: /dev/null: Permission denied` dan `apt-key: cannot create /dev/null`.
-  - Opsi mount devpts disempurnakan dengan `gid=5,mode=620,ptmxmode=666` untuk alokasi PTY Linux standar, mengatasi error `cannot set terminal process group (-1)`.
-  - Perbaikan total alur Exit & Kill All Sessions: menggunakan `stopService` biasa (menghilangkan crash ANR ForegroundService), pembersihan sesi & unmount tuntas, serta terminasi proses Linux bersih (`Process.killProcess`).
-  - Fitur In-App Update disesuaikan untuk unduhan publik tanpa perlu token otentikasi.
-  - Ditambahkan **Changelog Viewer Dialog** interaktif di Dashboard dan Settings agar pengguna bisa membaca rilis notes sebelum memasang update.
+## 10. Perbaikan PTY Process Group, Dpkg Auto-Recovery & Status Bar Notification Action
+
+### A. Perbaikan PTY Process Group & Job Control
+- **Penyebab `cannot set terminal process group (-1)`:**
+  Sebelumnya `script -qefc ...` dijalankan sebagai root, sehingga slave PTY (`/dev/pts/X`) dialokasikan dengan kepemilikan `root:root`. Saat `su - coder` dijalankan di dalamnya, user `coder` (UID 1000) mencoba memanggil `tcsetpgrp()` pada PTY milik root, yang ditolak oleh kernel (`EPERM` / `ENOTTY`).
+- **Solusi Tuntas:**
+  Perintah diubah agar `script` dieksekusi langsung oleh user `coder`:
+  `/bin/su - coder -c "echo \$\$ > '$markerFile'; exec /usr/bin/script -qefc 'exec /bin/bash -i' /dev/null"`
+  Dengan demikian, PTY slave dimiliki secara sah oleh `coder:tty`, sehingga `tcsetpgrp()` sukses dan fitur job control terminal bash aktif sempurna.
+
+### B. Auto-Recovery Dpkg Interrupted & Apt Broken Packages
+- Menambahkan pembersihan otomatis file lock basi (`rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*`).
+- Menjalankan `dpkg --configure -a` dan `apt-get install -f -y` secara otomatis sebelum proses instalasi toolchain dijalankan, mengatasi error *"E: dpkg was interrupted, you must manually run dpkg --configure -a"*.
+
+### C. Universal Sudo Bridge (Root Daemon FIFO)
+- Diperkuat dengan kombinasi:
+  1. Permissive PAM config di `/etc/pam.d/su` dan `/etc/pam.d/sudo` (`pam_permit.so`).
+  2. Script `/usr/local/bin/sudo` yang secara otomatis berkomunikasi dengan background root daemon via FIFO (`/run/devcode/sudo.fifo`), menjamin perintah `sudo apt update` dan `sudo apt install` selalu berhasil dijalankan sebagai UID 0 tanpa memicu `su: Authentication failure` bahkan pada filesystem `/data` yang bermode `nosuid`.
+
+### D. Fitur Notifikasi Dinamis & Tombol "EXIT & KILL ALL" di Status Bar
+- `WorkspaceService` kini menampilkan notifikasi dinamis yang mengabarkan status sesi terminal yang sedang aktif secara real-time.
+- Ditambahkan tombol aksi **[EXIT & KILL ALL]** langsung di laci notifikasi Android, sehingga pengguna dapat menghentikan seluruh sesi Linux dan unmount filesystem dengan 1 sentuhan tanpa harus membuka aplikasi.
